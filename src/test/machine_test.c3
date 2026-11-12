@@ -661,6 +661,7 @@ fn void errors_service_responses() @test
 	uint a2 = ab.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
 	char[] abort = mk_abort(v.seq, 2, 0x80010000, "x");
 	abort[8] = 7;
+	abort[12] = 1;
 	ab.feed(abort, at(2))!!;
 	assert(ab.poll_event(&e) && e.response.handle == a1 && (uint)e.response.header.service_result == 0x80010000);
 	assert(no_events(&ab) && ab.state == State.CHANNEL_OPEN && ab.pending_count == 1 && ab.pending[0].handle == a2);

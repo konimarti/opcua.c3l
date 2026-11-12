@@ -114,6 +114,7 @@ struct Event
 
 const StatusCode STATUS_BAD_TIMEOUT = (StatusCode)0x800A0000;
 const StatusCode STATUS_BAD_CONNECTION_CLOSED = (StatusCode)0x80AE0000;
+const StatusCode STATUS_BAD_OUT_OF_MEMORY = (StatusCode)0x80030000;
 
 
 const uint DEFAULT_CHANNEL_LIFETIME_MS = 600000;   // used when the server answers RevisedLifetime 0
@@ -172,6 +173,8 @@ struct Machine
 	Event[] events;
 	sz event_head;
 	sz event_count;
+	bool events_lost;            // an event could not be queued (out of memory)
+	bool failed_queued;          // a FAILED event was queued or delivered
 }
 
 fn void Machine.init(&self, Allocator allocator, Config config, ChunkSecurity security = null)
@@ -208,19 +211,38 @@ fn void Machine.push_event(&self, Event e)
 	{
 		sz cap = self.events.len == 0 ? 8 : (self.event_count + 1) * 2;
 		Event[]? fresh = alloc::alloc_array_try(self.allocator, Event, cap);
-		if (catch fresh) return;                                   // out of memory: the event is dropped
+		if (catch fresh)
+		{
+			self.events_lost = true;                               // reported by poll_event as FAILED, never silent
+			return;
+		}
 		for (sz i = 0; i < self.event_count; i++) fresh[i] = self.events[self.event_head + i];
 		if (self.events.ptr != null) alloc::free(self.allocator, self.events.ptr);
 		self.events = fresh;
 		self.event_head = 0;
 	}
+	if (e.kind == EventKind.FAILED) self.failed_queued = true;
 	self.events[self.event_head + self.event_count] = e;
 	self.event_count++;
 }
 
 fn bool Machine.poll_event(&self, Event* out)
 {
-	if (self.event_count == 0) return false;
+	if (self.event_count == 0)
+	{
+		if (!self.events_lost) return false;
+		// An event could not be queued: the caller must not wait for it forever.
+		self.events_lost = false;
+		if (self.failed_queued) return false;
+		self.failed_queued = true;
+		if (self.state != State.FAILED)
+		{
+			self.state = State.FAILED;
+			self.failure = BUFFER_FULL;
+		}
+		*out = { .kind = EventKind.FAILED };
+		return true;
+	}
 	*out = self.events[self.event_head];
 	self.event_head++;
 	self.event_count--;
@@ -286,14 +308,21 @@ fn void? Machine.connect(&self, String endpoint_url, Now now)
 	if (self.config.security_policy_uri.len != 0 && self.config.security_policy_uri != POLICY_NONE) return SECURITY_UNSUPPORTED~;
 	if (endpoint_url.len > MAX_ENDPOINT_URL) return URL_INVALID~;
 	if (self.config.receive_buffer_size < MIN_BUFFER_SIZE || self.config.send_buffer_size < MIN_BUFFER_SIZE) return BAD_LENGTH~;
-	char[] copy = alloc::alloc_array_try(self.allocator, char, endpoint_url.len + 1)!;
+	if (self.config.request_timeout_ms == 0 || self.config.handshake_timeout_ms == 0 || self.config.channel_lifetime_ms == 0) return BAD_LENGTH~;
+	// Everything that can fail comes first, so a failed connect leaves the machine untouched.
+	// The announced MaxMessageSize / MaxChunkCount are 0 (no limit); the local ceilings in Config.limits are enforced anyway.
+	HelloMessage hello = { 0, self.config.receive_buffer_size, self.config.send_buffer_size, 0, 0, endpoint_url };
+	encode_hello(&self.outbox, &hello)!;
+	char[]? copy = alloc::alloc_array_try(self.allocator, char, endpoint_url.len + 1);
+	if (catch err = copy)
+	{
+		self.outbox.clear();
+		return err~;
+	}
 	if (endpoint_url.len > 0) mem::copy(copy.ptr, endpoint_url.ptr, endpoint_url.len);
 	self.endpoint_url = (String)copy[:endpoint_url.len];
 	self.reader.init(self.allocator, self.config.limits, self.config.receive_buffer_size, self.security);
 	self.writer = chunk_writer(self.config.send_buffer_size, self.security);
-	// The announced MaxMessageSize / MaxChunkCount are 0 (no limit); the local ceilings in Config.limits are enforced anyway.
-	HelloMessage hello = { 0, self.config.receive_buffer_size, self.config.send_buffer_size, 0, 0, endpoint_url };
-	encode_hello(&self.outbox, &hello)!;
 	self.state = State.HEL_SENT;
 	self.handshake_active = true;
 	self.handshake_deadline = now.mono_ms + self.config.handshake_timeout_ms;
@@ -415,8 +444,7 @@ fn void? Machine.on_open_response(&self, Message* m, Now now, bool renew)
 		self.old_token_id = self.token_id;
 		self.have_old_token = true;
 		self.old_token_expires_ms = self.token_issued_ms + effective_lifetime(self.lifetime_ms);
-		self.renew_pending = false;
-		self.renew_id_count = 0;
+		self.renew_pending = false;                  // the ids stay known: a slow answer to an earlier try is dropped quietly
 	}
 	self.channel_id = channel;
 	self.token_id = token;
@@ -476,8 +504,8 @@ fn void? Machine.on_message(&self, Message* m, Now now)
 	if (m.type == MsgType.ERR)
 	{
 		Decoder d = decoder(m.body, self.allocator);         // only the status is read, nothing is allocated
-		self.last_status = (StatusCode)d.get_u32()!;
-		return PEER_ERROR~;
+		if (try status = d.get_u32()) self.last_status = (StatusCode)status;
+		return PEER_ERROR~;                                  // also for a body too short to carry a status
 	}
 	if (self.state == State.HEL_SENT)
 	{
@@ -492,10 +520,15 @@ fn void? Machine.on_message(&self, Message* m, Now now)
 	switch (m.type)
 	{
 		case MSG:
-			if (m.aborted) return self.on_abort(m);
+			if (m.aborted) return self.on_abort(m, now);
 			return self.on_service(m, now);
 		case OPN:
-			if (!self.renew_pending) return BAD_RESPONSE~;
+			if (!self.renew_pending)
+			{
+				// a slow server may answer the first try and the retry: the second answer is harmless
+				if (self.is_renew_id(m.request_id)) return;
+				return BAD_RESPONSE~;
+			}
 			return self.on_open_response(m, now, true);
 		case CLO: return CHANNEL_CLOSED~;
 		default: return BAD_HANDSHAKE~;
@@ -563,8 +596,18 @@ fn void Machine.complete_with_status(&self, sz idx, StatusCode status, bool loca
 	self.push_event(e);
 }
 
-fn void? Machine.on_abort(&self, Message* m)
+fn bool Machine.is_renew_id(&self, uint id)
 {
+	for (sz i = 0; i < self.renew_id_count; i++)
+	{
+		if (self.renew_ids[i] == id) return true;
+	}
+	return false;
+}
+
+fn void? Machine.on_abort(&self, Message* m, Now now)
+{
+	self.check_token(m, now)!;
 	sz idx = self.find_pending(m.request_id);
 	if (idx == self.pending_count) return;           // an abort for a request we no longer wait for
 	self.last_status = m.abort_status;
@@ -582,6 +625,7 @@ fn void? Machine.on_service(&self, Message* m, Now now)
 	}
 	PendingRequest p = self.pending[idx];
 	Event e = { .kind = EventKind.RESPONSE };
+	bool no_memory = false;
 	@pool()
 	{
 		Decoder d = decoder(m.body, tmem, self.config.limits);
@@ -600,11 +644,23 @@ fn void? Machine.on_service(&self, Message* m, Now now)
 		{
 			e.response.kind = ResponseKind.RAW;
 			sz rest = d.remaining();
-			char[] copy = alloc::alloc_array_try(p.allocator, char, rest == 0 ? 1 : rest)!;
-			if (rest > 0) mem::copy(copy.ptr, d.input.ptr + d.pos, rest);
-			e.response.raw = copy[:rest];
+			char[]? copy = alloc::alloc_array_try(p.allocator, char, rest == 0 ? 1 : rest);
+			if (try c = copy)
+			{
+				if (rest > 0) mem::copy(c.ptr, d.input.ptr + d.pos, rest);
+				e.response.raw = c[:rest];
+			}
+			else
+			{
+				no_memory = true;                    // only this request fails, the channel is fine
+			}
 		}
 	};
+	if (no_memory)
+	{
+		self.complete_with_status(idx, STATUS_BAD_OUT_OF_MEMORY, false);
+		return;
+	}
 	self.remove_pending(idx);
 	self.push_event(e);
 }
@@ -754,6 +810,7 @@ fn void? Machine.run_timers(&self, Now now)
 		else if (now.mono_ms >= self.next_renew_ms)
 		{
 			if (now.mono_ms >= self.token_issued_ms + self.lifetime_ms) return TIMEOUT~;
+			self.renew_id_count = 0;                 // a new renewal starts: forget the ids of the last one
 			self.queue_open(true, now)!;
 			self.renew_pending = true;
 			self.renew_retry_ms = now.mono_ms + self.config.request_timeout_ms;
