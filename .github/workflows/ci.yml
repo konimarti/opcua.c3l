@@ -1,6 +1,10 @@
 # CI: Linux, macOS and Windows build and test jobs plus a Linux job against the open62541 and asyncua peers.
+# The compiler archives are downloaded without a checksum check (no checksums are published to compare with: verify).
 # Written for review; it is never pushed by the coder (Hermes shows Koni the diff first).
 name: ci
+
+permissions:
+  contents: read
 
 on:
   push:
@@ -32,6 +36,7 @@ jobs:
       - name: Generated files are up to date
         run: c3c run uagen -- --check
       - name: Tests under AddressSanitizer
+        timeout-minutes: 20
         run: c3c test --sanitize=address     # flag name: verify for 0.8.6
 
   build-macos:
@@ -41,8 +46,8 @@ jobs:
       - name: Install c3c
         run: |
           curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-macos.zip" -o c3.zip   # asset name: verify
-          mkdir -p /opt/c3 && unzip -q c3.zip -d /opt/c3
-          echo "/opt/c3" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/c3" && unzip -q c3.zip -d "$HOME/c3"
+          echo "$HOME/c3" >> "$GITHUB_PATH"
       - run: c3c test
       - run: c3c build uatool
 
