@@ -29,6 +29,18 @@ fn Duration default_io_timeout() @private => time::sec(10);
 // A Limits built by hand has 0 in the browse fields: that means the default, not "no page at all".
 fn uint browse_limit(uint value, uint default_value) @private => value == 0 ? default_value : value;
 
+// What a merged reference costs: a fixed part plus the text it carries.
+fn ulong reference_bytes(ReferenceDescription* r) @private
+{
+	ulong n = 100;
+	n += r.browse_name.name.len + r.display_name.text.len + r.display_name.locale.len;
+	n += r.node_id.namespace_uri.len + r.type_definition.namespace_uri.len;
+	if (r.reference_type_id.kind == NodeIdKind.STRING) n += r.reference_type_id.str.len;
+	if (r.node_id.id.kind == NodeIdKind.STRING) n += r.node_id.id.str.len;
+	if (r.type_definition.id.kind == NodeIdKind.STRING) n += r.type_definition.id.str.len;
+	return n;
+}
+
 fn bool all_zero(char[] b) @private
 {
 	foreach (x : b)
@@ -343,16 +355,21 @@ fn BrowseResult? Client.browse(&self, Allocator alloc, NodeId node, BrowseDirect
 	List{ReferenceDescription} merged;
 	merged.init(self.allocator);
 	defer merged.free();
-	foreach (r : result.references) merged.push(r);
+	ulong merged_bytes = 0;
+	foreach (r : result.references)
+	{
+		merged.push(r);
+		merged_bytes += reference_bytes(&r);
+	}
 	char[] point = result.continuation_point;
 	StatusCode status = result.status_code;
 	uint pages = 0;
 	while (true)
 	{
-		if (merged.len() > browse_limit(self.machine.config.limits.max_browse_references, 1_000_000))
+		if (merged.len() > browse_limit(self.machine.config.limits.max_browse_references, 1_000_000) || merged_bytes > browse_limit(self.machine.config.limits.max_browse_bytes, 256 << 20))
 		{
 			if (point.len > 0) self.release_point(alloc, point);
-			return TOO_MANY_PAGES~;                          // more references than the limit allows, however they arrived
+			return TOO_MANY_REFERENCES~;                     // more references or bytes than the limits allow, however they arrived
 		}
 		if (point.len == 0 || status_is_bad(status)) break;
 		pages++;
@@ -369,7 +386,11 @@ fn BrowseResult? Client.browse(&self, Allocator alloc, NodeId node, BrowseDirect
 			return err~;
 		}
 		BrowseResult part = next.browse_results[0];
-		foreach (r : part.references) merged.push(r);
+		foreach (r : part.references)
+		{
+			merged.push(r);
+			merged_bytes += reference_bytes(&r);
+		}
 		status = part.status_code;
 		point = part.continuation_point;
 	}

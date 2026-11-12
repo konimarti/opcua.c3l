@@ -107,7 +107,8 @@ hand-built `Limits` means the default.
 | `max_reassembly_bytes` | 16 MiB (all partial messages together) | `MESSAGE_TOO_LARGE` |
 | `max_outstanding_requests` | 64 | `TOO_MANY_PENDING` |
 | `max_browse_pages` | 1000 (`BrowseNext` rounds of one `Client.browse`) | `TOO_MANY_PAGES` |
-| `max_browse_references` | 1 000 000 (references merged by one `Client.browse`) | `TOO_MANY_PAGES` |
+| `max_browse_references` | 1 000 000 (references merged by one `Client.browse`) | `TOO_MANY_REFERENCES` |
+| `max_browse_bytes` | 256 MiB (100 bytes per merged reference plus its names) | `TOO_MANY_REFERENCES` |
 
 ### Write and call safety
 
