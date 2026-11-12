@@ -1,3 +1,4 @@
 build/
 obj/
 .work/
+peers/peer.env
