@@ -115,11 +115,10 @@ fn ExtensionObject? Decoder.get_extension_object(&self)
 }
 
 // ---------- DiagnosticInfo ----------
-// Wire order of the fields. The mask bits are SymbolicId 0x01, NamespaceUri 0x02, LocalizedText 0x04, Locale 0x08,
-// AdditionalInfo 0x10, InnerStatusCode 0x20, InnerDiagnosticInfo 0x40; fields follow in bit order. Some descriptions list
-// Locale before LocalizedText on the wire: that is NOT confirmed against the specification text. Flipping this constant
-// swaps the two Int32 fields on the wire, nothing else changes.
-const bool DIAG_LOCALE_BEFORE_TEXT = false;
+// Wire order of the fields, as listed in the schema of the specification: SymbolicId, NamespaceUri, Locale, LocalizedText,
+// AdditionalInfo, InnerStatusCode, InnerDiagnosticInfo. The mask bits are SymbolicId 0x01, NamespaceUri 0x02,
+// LocalizedText 0x04, Locale 0x08, AdditionalInfo 0x10, InnerStatusCode 0x20, InnerDiagnosticInfo 0x40, so Locale (bit
+// 0x08) is written before LocalizedText (bit 0x04).
 
 fn void? Encoder.put_diagnostic_info(&self, DiagnosticInfo v)
 {
@@ -132,13 +131,8 @@ fn void? Encoder.put_diagnostic_info(&self, DiagnosticInfo v)
 	self.put_u8(mask)!;
 	if (mask & 0x01) self.put_u32((uint)v.symbolic_id)!;
 	if (mask & 0x02) self.put_u32((uint)v.namespace_uri)!;
-	$if DIAG_LOCALE_BEFORE_TEXT:
-		if (mask & 0x08) self.put_u32((uint)v.locale)!;
-		if (mask & 0x04) self.put_u32((uint)v.localized_text)!;
-	$else
-		if (mask & 0x04) self.put_u32((uint)v.localized_text)!;
-		if (mask & 0x08) self.put_u32((uint)v.locale)!;
-	$endif
+	if (mask & 0x08) self.put_u32((uint)v.locale)!;
+	if (mask & 0x04) self.put_u32((uint)v.localized_text)!;
 	if (mask & 0x10) self.put_string(v.additional_info)!;
 	if (mask & 0x20) self.put_u32((uint)v.inner_status)!;
 	if (mask & 0x40) self.put_diagnostic_info(*v.inner)!;
@@ -154,13 +148,8 @@ fn DiagnosticInfo? Decoder.get_diagnostic_info(&self)
 	d.present = mask & 0x0F;
 	if (mask & 0x01) d.symbolic_id = (int)self.get_u32()!;
 	if (mask & 0x02) d.namespace_uri = (int)self.get_u32()!;
-	$if DIAG_LOCALE_BEFORE_TEXT:
-		if (mask & 0x08) d.locale = (int)self.get_u32()!;
-		if (mask & 0x04) d.localized_text = (int)self.get_u32()!;
-	$else
-		if (mask & 0x04) d.localized_text = (int)self.get_u32()!;
-		if (mask & 0x08) d.locale = (int)self.get_u32()!;
-	$endif
+	if (mask & 0x08) d.locale = (int)self.get_u32()!;
+	if (mask & 0x04) d.localized_text = (int)self.get_u32()!;
 	if (mask & 0x10) d.additional_info = self.get_string()!;
 	if (mask & 0x20) d.inner_status = (StatusCode)self.get_u32()!;
 	if (mask & 0x40)

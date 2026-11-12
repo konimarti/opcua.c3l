@@ -2,11 +2,9 @@ module opcua;
 
 // DiagnosticInfo (OPC 10000-6 5.2.2.12). Vectors DI1-DI6, M63-M65.
 //
-// Open point: the order of the Locale and LocalizedText Int32 fields on the wire. The implementation writes the fields in
-// mask-bit order (SymbolicId 0x01, NamespaceUri 0x02, LocalizedText 0x04, Locale 0x08, AdditionalInfo 0x10, InnerStatusCode
-// 0x20, InnerDiagnosticInfo 0x40). Some descriptions list Locale before LocalizedText; this is NOT confirmed against the
-// specification text. The constant DIAG_LOCALE_BEFORE_TEXT swaps the two fields; test diag_order below follows the
-// constant, so a flip is a one-line change (plus the DI6 hex in the first test).
+// Wire order, as in the schema of the specification: SymbolicId, NamespaceUri, Locale, LocalizedText, AdditionalInfo,
+// InnerStatusCode, InnerDiagnosticInfo. The mask bits are 0x01, 0x02, LocalizedText 0x04, Locale 0x08, 0x10, 0x20, 0x40, so
+// the Locale index (bit 0x08) comes before the LocalizedText index (bit 0x04).
 
 fn void fixtures_diagnostic_info() @test
 {
@@ -46,14 +44,30 @@ fn void diag_order() @test
 	String di6 = "1F 01 00 00 00 02 00 00 00 03 00 00 00 04 00 00 00 01 00 00 00 41";
 	Decoder d = dec(di6);
 	DiagnosticInfo r = d.get_diagnostic_info()!!;
-	int text = DIAG_LOCALE_BEFORE_TEXT ? 4 : 3;
-	int locale = DIAG_LOCALE_BEFORE_TEXT ? 3 : 4;
+	int locale = 3;                                                                      // the third Int32 on the wire is the Locale
+	int text = 4;
 	assert(r.symbolic_id == 1 && r.namespace_uri == 2);
 	assert(r.localized_text == text && r.locale == locale);
 	assert(r.additional_info == "A");
 	check_vector(di6, DIAG);
 	DiagnosticInfo built = { .present = 0x0F, .symbolic_id = 1, .namespace_uri = 2, .localized_text = text, .locale = locale, .additional_info = "A" };
 	assert(enc_diag(built) == unhex(di6));
+}
+
+// Mask 0x0C: both text fields, the Locale index (bit 0x08) comes first on the wire, then the LocalizedText index (0x04).
+fn void diag_locale_before_text() @test
+{
+	String hex = "0C 07 00 00 00 09 00 00 00";
+	Decoder d = dec(hex);
+	DiagnosticInfo r = d.get_diagnostic_info()!!;
+	assert(r.locale == 7 && r.localized_text == 9 && d.remaining() == 0);
+	DiagnosticInfo built = { .present = 0x0C, .locale = 7, .localized_text = 9 };
+	assert(enc_diag(built) == unhex(hex));
+	check_vector(hex, DIAG);
+	DiagnosticInfo only_text = { .present = 0x04, .localized_text = 9 };
+	assert(enc_diag(only_text) == unhex("04 09 00 00 00"));
+	DiagnosticInfo only_locale = { .present = 0x08, .locale = 7 };
+	assert(enc_diag(only_locale) == unhex("08 07 00 00 00"));
 }
 
 fn void diag_nested() @test
