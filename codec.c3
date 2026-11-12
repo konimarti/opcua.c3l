@@ -54,7 +54,7 @@ fn void? ByteBuf.append(&self, char[] bytes)
 // Overwrites 4 already written bytes at `pos` (little endian).
 fn void? ByteBuf.patch_u32(&self, sz pos, uint value)
 {
-	if (pos + 4 > self.len) return BUFFER_FULL~;
+	if (pos < 0 || self.len < 4 || pos > self.len - 4) return BUFFER_FULL~;
 	self.data[pos] = (char)value;
 	self.data[pos + 1] = (char)(value >> 8);
 	self.data[pos + 2] = (char)(value >> 16);
@@ -193,7 +193,7 @@ fn void? Encoder.put_nodeid_flagged(&self, NodeId v, char flags)
 fn void? Encoder.put_array_len(&self, sz n, bool null_array = false)
 {
 	if (null_array) return self.put_u32(0xFFFF_FFFF);
-	if (n > int::max) return BAD_LENGTH~;
+	if (n < 0 || n > int::max) return BAD_LENGTH~;
 	return self.put_u32((uint)n);
 }
 
@@ -223,7 +223,7 @@ fn void Decoder.leave(&self) => self.depth--;
 
 fn char[]? Decoder.take(&self, sz n)
 {
-	if (n > self.remaining()) return TRUNCATED~;
+	if (n < 0 || n > self.remaining()) return TRUNCATED~;
 	char[] r = self.input[self.pos:n];
 	self.pos += n;
 	return r;
@@ -367,7 +367,8 @@ fn int? Decoder.get_array_len(&self, sz min_element_size)
 	if (n < -1) return BAD_LENGTH~;
 	if ((uint)n > self.limits.max_array_length) return BAD_LENGTH~;
 	// overflow-free form of n * min_element_size > remaining
-	if (min_element_size != 0 && (ulong)n > (ulong)self.remaining() / (ulong)min_element_size) return TRUNCATED~;
+	sz min_size = min_element_size < 1 ? 1 : min_element_size;
+	if ((ulong)n > (ulong)self.remaining() / (ulong)min_size) return TRUNCATED~;
 	return n;
 }
 
