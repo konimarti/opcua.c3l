@@ -592,6 +592,10 @@ fn void? ChunkWriter.write_chunks(&self, ByteBuf* out, MsgType type, uint channe
 	ByteBuf chunk;
 	chunk.init(out.allocator, header_len + 8 + per + 64);
 	defer chunk.free();
+	defer
+	{
+		if (chunk.data.len > 0) mem::clear(chunk.data.ptr, chunk.data.len);              // the chunk may carry a password
+	}
 	uint seq = self.next_sequence;
 	sz offset = 0;
 	for (sz i = 0; i < count; i++)

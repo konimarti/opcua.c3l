@@ -251,6 +251,7 @@ fn void Machine.init(&self, Allocator allocator, Config config, ChunkSecurity se
 fn void Machine.free(&self)
 {
 	self.reader.free();
+	if (self.outbox.data.len > 0) mem::clear(self.outbox.data.ptr, self.outbox.data.len);
 	self.outbox.free();
 	if (self.arena_ready) self.arena.free();
 	self.arena_ready = false;
@@ -790,6 +791,7 @@ fn void Machine.consume_output(&self, sz n)
 	self.out_pos += n > left ? left : n;
 	if (self.out_pos >= self.outbox.len)
 	{
+		if (self.outbox.len > 0) mem::clear(self.outbox.data.ptr, self.outbox.len);       // a request may carry a password
 		self.outbox.clear();
 		self.out_pos = 0;
 		if (self.state == State.CLOSING && !self.closing_session) self.finish_close();
