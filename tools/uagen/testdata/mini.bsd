@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<opc:TypeDictionary
+  xmlns:opc="http://opcfoundation.org/BinarySchema/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:ua="http://opcfoundation.org/UA/"
+  xmlns:tns="http://opcfoundation.org/UA/"
+  DefaultByteOrder="LittleEndian"
+  TargetNamespace="http://opcfoundation.org/UA/"
+>
+  <opc:Import Namespace="http://opcfoundation.org/BinarySchema/" />
+
+  <opc:EnumeratedType Name="SampleEnum" LengthInBits="32">
+    <opc:EnumeratedValue Name="Alpha" Value="1" />
+    <opc:EnumeratedValue Name="Beta" Value="2" />
+  </opc:EnumeratedType>
+
+  <opc:StructuredType Name="ArrayHolder" BaseType="ua:ExtensionObject">
+    <opc:Field Name="NoOfValues" TypeName="opc:Int32" />
+    <opc:Field Name="Values" TypeName="opc:Int32" LengthField="NoOfValues" />
+  </opc:StructuredType>
+
+  <opc:StructuredType Name="Composite" BaseType="ua:ExtensionObject">
+    <opc:Field Name="EnumField" TypeName="tns:SampleEnum" />
+    <opc:Field Name="Holder" TypeName="tns:ArrayHolder" />
+  </opc:StructuredType>
+</opc:TypeDictionary>
