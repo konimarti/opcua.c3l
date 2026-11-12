@@ -3,3 +3,5 @@ obj/
 .work/
 peers/*.env
 peers/observed.log
+peers/*.pid
+peers/*.log

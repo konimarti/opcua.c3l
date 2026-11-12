@@ -20,6 +20,7 @@ struct PeerConfig
 	String node_array;
 	String method_object;
 	String method;
+	String peer_pid;         // process id of the peer (the renewal test pauses it with SIGSTOP)
 	String method_kind;      // "add" (two Int32 in, their sum out; the default) or "string" (one String in, a String out)
 }
 
@@ -64,6 +65,7 @@ fn PeerConfig peer_config()
 	c.method_object = peer_value(text, "OPCUA_NODE_METHOD_OBJECT");
 	c.method = peer_value(text, "OPCUA_NODE_METHOD");
 	c.method_kind = peer_value(text, "OPCUA_METHOD_KIND");
+	c.peer_pid = peer_value(text, "OPCUA_PEER_PID");
 	c.configured = c.url.len > 0;
 	return c;
 }
