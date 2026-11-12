@@ -59,3 +59,27 @@ fn void hardening_password_is_wiped_after_activation_is_queued() @test
 	Message am = first_message(m.pending_output());
 	assert(am.body.len > 0, "the request itself was built before the wipe");
 }
+
+// A user name policy that names the None policy (asyncua does) sends the password in the clear like any other: with the
+// opt-in it is used, without the opt-in it is refused as before.
+fn void hardening_user_policy_naming_none_is_clear_text() @test
+{
+	Config c = session_config();
+	c.allow_cleartext_password = true;
+	Machine m;
+	m.init(mem, c);
+	defer m.free();
+	FakeServer s = fake_server();
+	open_channel(&m, &s);
+	m.open_session(identity_username("alice", "pw"), at(0))!!;
+	eat(&m);
+	String eps = string::tformat("01 00 00 00 %s", endpoint_hex(str_hex(POLICY_NONE)));
+	m.feed(s.create_session_response(m.pending[0].request_id, m.pending[0].handle, 1, session_payload(DOUBLE_60000, eps)), at(0))!!;
+	assert(m.state == State.ACTIVATING, "ActivateSession was queued");
+	Machine n;
+	n.init(mem, session_config());
+	defer n.free();
+	FakeServer t = fake_server();
+	open_channel(&n, &t);
+	assert(@fails(n.open_session(identity_username("alice", "pw"), at(0)), SECURITY_UNSUPPORTED), "still refused without the opt-in");
+}
