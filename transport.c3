@@ -39,9 +39,22 @@ fn void? wait_socket(TcpSocket* socket, PollSubscribe events, Duration timeout) 
 {
 	long ms = timeout.to_ms();
 	if (ms < 0) ms = 0;
-	Poll[1] p = { { socket.sock, events, {} } };
-	ulong ready = net::poll_ms(&p, ms)!;
-	if (ready == 0) return TIMEOUT~;
+	Clock start = clock::now();
+	// poll can be interrupted by a signal and then reports an error although the connection is fine: look again (with
+	// the time that is left) a few times before giving up
+	for (int attempt = 0; attempt < 4; attempt++)
+	{
+		long left = ms - (long)start.to_now() / 1_000_000;
+		if (left < 0) left = 0;
+		Poll[1] p = { { socket.sock, events, {} } };
+		ulong? ready = net::poll_ms(&p, left);
+		if (try n = ready)
+		{
+			if (n == 0) return TIMEOUT~;
+			return;
+		}
+	}
+	return CLOSED~;
 }
 
 fn usz? TcpTransport.read(&self, char[] buf, Duration timeout) @dynamic
@@ -63,9 +76,13 @@ fn void? TcpTransport.write(&self, char[] data, Duration timeout) @dynamic
 {
 	if (!self.open) return CLOSED~;
 	sz done = 0;
+	Clock start = clock::now();
+	long total_ms = timeout.to_ms();
 	while (done < data.len)
 	{
-		if (catch err = wait_socket(&self.socket, PollSubscribe.WRITE, timeout))
+		// one deadline for the whole write, not one per partial send
+		long left = total_ms - (long)start.to_now() / 1_000_000;
+		if (catch err = wait_socket(&self.socket, PollSubscribe.WRITE, time::ms(left < 0 ? 0 : left)))
 		{
 			if (err == TIMEOUT) return TIMEOUT~;
 			return CLOSED~;
@@ -100,10 +117,18 @@ fn EndpointUrl? parse_endpoint_url(String url)
 	String scheme = "opc.tcp://";
 	if (url.len <= scheme.len || url[:scheme.len] != scheme) return URL_INVALID~;
 	String rest = url[scheme.len..];
+	foreach (c : rest)
+	{
+		if (c <= ' ' || c == 0x7F) return URL_INVALID~;          // blanks and control characters
+	}
 	EndpointUrl r = { .port = 4840 };
 	sz end = 0;
 	while (end < rest.len && rest[end] != '/') end++;
 	String authority = rest[:end];
+	foreach (c : authority)
+	{
+		if (c == '@') return URL_INVALID~;                        // no user info in an endpoint URL
+	}
 	r.path = rest[end..];
 	if (authority.len == 0) return URL_INVALID~;
 	String port_text;
