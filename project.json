@@ -8,6 +8,10 @@
 		"opcua": {
 			"type": "static-lib"
 		},
+		"uatool": {
+			"type": "executable",
+			"sources": [ "src/uatool/**" ]
+		},
 		"uagen": {
 			"type": "executable",
 			"sources": [ "tools/uagen/**" ]
