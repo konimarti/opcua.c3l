@@ -495,8 +495,8 @@ fn void? Machine.on_message(&self, Message* m, Now now)
 {
 	if (m.type == MsgType.ERR)
 	{
-		ErrorMessage err = decode_error(m.body, tmem)!;
-		self.last_status = err.error;
+		Decoder d = decoder(m.body, self.allocator);         // only the status is read, nothing is allocated
+		self.last_status = (StatusCode)d.get_u32()!;
 		return PEER_ERROR~;
 	}
 	if (self.state == State.HEL_SENT)

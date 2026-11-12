@@ -346,6 +346,63 @@ fn void renew_sequence_continues() @test
 	assert(load_u32_test(msg, 16) == 3 && load_u32_test(msg, 12) == 2, "sequence 3 under the new token");
 }
 
+// While a renewal is pending, requests go out under the old, still valid token.
+fn void renew_pending_requests_use_the_old_token() @test
+{
+	Machine m;
+	m.init(mem, test_config());
+	defer m.free();
+	FakeServer s = fake_server();
+	m.config.request_timeout_ms = 100000;
+	open_channel(&m, &s, 0, 60000);
+	m.handle_timeout(at(45000))!!;
+	assert(m.renew_pending);
+	eat(&m);
+	m.send_raw(tmem, at(45100), nodeid_num(0, 631), {})!!;
+	char[] chunk = cat(m.pending_output(), {});
+	assert(load_u32_test(chunk, 12) == 1, "the old token");
+	eat(&m);
+	m.feed(s.opn_response(m.renew_ids[0], m.open_handle, 7, 2, 60000), at(45200))!!;
+	m.send_raw(tmem, at(45300), nodeid_num(0, 631), {})!!;
+	assert(load_u32_test(m.pending_output(), 12) == 2, "the new token once it is installed");
+}
+
+// D6: the sequence number wrap, in both directions of the machine.
+fn void sequence_wrap_in_the_machine() @test
+{
+	Machine m;
+	m.init(mem, test_config());
+	defer m.free();
+	FakeServer s = fake_server(7, 0xFFFFFBFF);                                             // the OPN response already carries a high value
+	open_channel(&m, &s);
+	uint h = m.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	s.seq = 1;                                                                             // 0xFFFFFBFF followed by 1 is a legal wrap
+	m.feed(s.msg(2, h, 1), at(2))!!;
+	Event e;
+	assert(m.poll_event(&e) && e.kind == EventKind.RESPONSE && e.response.handle == h);
+	Machine c;                                                                             // our own counter wraps the same way
+	c.init(mem, test_config());
+	defer c.free();
+	FakeServer t = fake_server();
+	open_channel(&c, &t);
+	eat(&c);
+	c.writer.next_sequence = 0xFFFFFC00;
+	c.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	char[] first = cat(c.pending_output(), {});
+	eat(&c);
+	c.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	char[] second = cat(c.pending_output(), {});
+	assert(load_u32_test(first, 16) == 0xFFFFFC00 && load_u32_test(second, 16) == 1);
+	Machine g;                                                                             // a gap after the wrap is still an error
+	g.init(mem, test_config());
+	defer g.free();
+	FakeServer u = fake_server(7, 0xFFFFFBFF);
+	open_channel(&g, &u);
+	uint gh = g.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	u.seq = 0x400;                                                                         // 1024 is not below 1024
+	assert(@fails(g.feed(u.msg(2, gh, 1), at(2)), SEQUENCE_ERROR));
+}
+
 // ---------- old_token_window (M94, S3) ----------
 fn void old_token_window() @test
 {
@@ -705,7 +762,7 @@ fn void requests_ids_and_limits() @test
 	assert(@fails(early.send_raw(tmem, at(0), nodeid_num(0, 631), {}), BAD_STATE));
 }
 
-// ---------- the core reads no clock ----------
+// ---------- chunking of requests ----------
 fn void requests_large_service_is_chunked() @test
 {
 	Machine m;
