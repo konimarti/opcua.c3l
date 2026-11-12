@@ -36,24 +36,75 @@ fn char[] unhex(String s)
 
 fn Decoder dec(String hex) => decoder(unhex(hex), tmem);
 
-// The built-in kinds the codec can decode, for the generic sweeps.
-enum Kind { BOOL, U16, U32, U64, F32, F64, STRING, BYTES, GUID, NODEID }
+// The built-in kinds the codec handles, for the generic sweeps.
+enum Kind
+{
+	BOOL, U16, U32, U64, F32, F64, STRING, BYTES, GUID, NODEID,
+	DATETIME, QNAME, LTEXT, XNODEID, EXTOBJ, DIAG, VARIANT, DATAVALUE,
+}
 
-fn void? decode_kind(Decoder* d, Kind k)
+// Decodes one value of kind `k` and encodes it again into `e` (a sizer or a buffer encoder).
+fn void? roundtrip(Decoder* d, Encoder* e, Kind k)
 {
 	switch (k)
 	{
-		case BOOL: (void)d.get_bool()!;
-		case U16: (void)d.get_u16()!;
-		case U32: (void)d.get_u32()!;
-		case U64: (void)d.get_u64()!;
-		case F32: (void)d.get_f32()!;
-		case F64: (void)d.get_f64()!;
-		case STRING: (void)d.get_string()!;
-		case BYTES: (void)d.get_bytestring()!;
-		case GUID: (void)d.get_guid()!;
-		case NODEID: (void)d.get_nodeid()!;
+		case BOOL: e.put_bool(d.get_bool()!)!;
+		case U16: e.put_u16(d.get_u16()!)!;
+		case U32: e.put_u32(d.get_u32()!)!;
+		case U64: e.put_u64(d.get_u64()!)!;
+		case F32: e.put_f32(d.get_f32()!)!;
+		case F64: e.put_f64(d.get_f64()!)!;
+		case STRING: e.put_string(d.get_string()!)!;
+		case BYTES: e.put_bytestring(d.get_bytestring()!)!;
+		case GUID: e.put_guid(d.get_guid()!)!;
+		case NODEID: e.put_nodeid(d.get_nodeid()!)!;
+		case DATETIME: e.put_datetime(d.get_datetime()!)!;
+		case QNAME: e.put_qualified_name(d.get_qualified_name()!)!;
+		case LTEXT: e.put_localized_text(d.get_localized_text()!)!;
+		case XNODEID: e.put_expanded_nodeid(d.get_expanded_nodeid()!)!;
+		case EXTOBJ: e.put_extension_object(d.get_extension_object()!)!;
+		case DIAG: e.put_diagnostic_info(d.get_diagnostic_info()!)!;
+		case VARIANT: e.put_variant(d.get_variant()!)!;
+		case DATAVALUE: e.put_data_value(d.get_data_value()!)!;
 	}
+}
+
+// Decoding, followed by re-encoding the decoded value into a sizer (so the encoders are exercised too).
+fn void? decode_kind(Decoder* d, Kind k)
+{
+	Encoder sink = encoder_sizer();
+	return roundtrip(d, &sink, k);
+}
+
+// encode(decode(hex)) as bytes
+fn char[] reencode(String hex, Kind k)
+{
+	Decoder d = dec(hex);
+	ByteBuf b;
+	b.init(tmem);
+	Encoder e = encoder(&b);
+	roundtrip(&d, &e, k)!!;
+	return b.bytes();
+}
+
+// size reported by the sizing encoder for the decoded value
+fn sz sizer_of(String hex, Kind k)
+{
+	Decoder d = dec(hex);
+	Encoder e = encoder_sizer();
+	roundtrip(&d, &e, k)!!;
+	return e.written;
+}
+
+// A valid vector: decodes and consumes all bytes, re-encodes to the same bytes (when canonical), the sizer agrees,
+// and every proper prefix fails with TRUNCATED.
+fn void check_vector(String hex, Kind k, bool canonical = true)
+{
+	assert(decodes_fully(hex, k), "vector must decode");
+	char[] re = reencode(hex, k);
+	if (canonical) assert(re == unhex(hex), "re-encoded bytes");
+	assert(sizer_of(hex, k) == re.len, "sizer");
+	prefix_sweep(hex, k);
 }
 
 // True when decoding `hex` as `k` fails with exactly `expected`.
