@@ -74,6 +74,16 @@ fn void trace_service(DString* s, char[] rest) @private
 	};
 }
 
+// Text from the wire made safe to print: printable ASCII only (anything else becomes `?`), at most 128 characters.
+fn String printable(String s) @private
+{
+	DString d = dstring::temp();
+	sz n = s.len < 128 ? s.len : 128;
+	for (sz i = 0; i < n; i++) d.append_char(s[i] >= 0x20 && s[i] < 0x7F ? s[i] : '?');
+	if (s.len > n) d.append("...");
+	return d.str_view();
+}
+
 // One chunk (or transport frame) as one line of text appended to `out_text`.
 fn void trace_chunk(char[] chunk, ByteBuf* out_text)
 {
@@ -136,7 +146,7 @@ fn void trace_chunk_text(DString* s, char[] chunk) @private
 				String policy = d.get_string() ?? "";
 				char[] cert = d.get_bytestring() ?? null_bytes();
 				char[] thumb = d.get_bytestring() ?? null_bytes();
-				s.appendf(" policy=%s sender_certificate=%d bytes thumbprint=%d bytes", policy, cert.len, thumb.len);
+				s.appendf(" policy=%s sender_certificate=%d bytes thumbprint=%d bytes", printable(policy), cert.len, thumb.len);
 				if (d.remaining() >= 8)
 				{
 					s.appendf(" seq=%d request=%d", trace_u32(chunk, d.pos), trace_u32(chunk, d.pos + 4));
@@ -152,9 +162,14 @@ fn void trace_chunk_text(DString* s, char[] chunk) @private
 struct FrameTracer
 {
 	ByteBuf pending;
+	uint max_frame;          // frames announcing more are not buffered (the receive buffer size of the connection)
 }
 
-fn void FrameTracer.init(&self, Allocator allocator) => self.pending.init(allocator, 256);
+fn void FrameTracer.init(&self, Allocator allocator, uint max_frame = 65536)
+{
+	self.pending.init(allocator, 256);
+	self.max_frame = max_frame;
+}
 fn void FrameTracer.free(&self) => self.pending.free();
 
 fn void FrameTracer.feed(&self, char[] data, ByteBuf* out_text)
@@ -164,7 +179,7 @@ fn void FrameTracer.feed(&self, char[] data, ByteBuf* out_text)
 	{
 		char[] all = self.pending.bytes();
 		uint size = trace_u32(all, 4);
-		if (size < 8 || size > 1 << 24)
+		if (size < 8 || size > self.max_frame)
 		{
 			self.pending.clear();                      // not a frame boundary: give up on this buffer
 			return;
