@@ -232,7 +232,7 @@ fn int report(String what, fault f, Client* c)
 fn int cmd_endpoints(Options* o)
 {
 	Conn c;
-	if (catch err = connect(o, &c, false)) return report("connect", err, null);
+	if (catch err = connect(o, &c, false)) return report("connect", err, c.client);
 	defer c.drop();
 	DynamicArenaAllocator arena;
 	arena.init(mem, 8192);
@@ -256,7 +256,7 @@ fn int cmd_read(Options* o)
 {
 	if (o.args.len == 0) return usage();
 	Conn c;
-	if (catch err = connect(o, &c, true)) return report("connect", err, null);
+	if (catch err = connect(o, &c, true)) return report("connect", err, c.client);
 	defer c.drop();
 	DynamicArenaAllocator arena;
 	arena.init(mem, 8192);
@@ -303,7 +303,7 @@ fn int cmd_write(Options* o)
 		return 2;
 	}
 	Conn c;
-	if (catch err = connect(o, &c, true)) return report("connect", err, null);
+	if (catch err = connect(o, &c, true)) return report("connect", err, c.client);
 	defer c.drop();
 	DynamicArenaAllocator arena;
 	arena.init(mem, 8192);
@@ -341,7 +341,7 @@ fn int cmd_browse(Options* o)
 		return 2;
 	}
 	Conn c;
-	if (catch err = connect(o, &c, true)) return report("connect", err, null);
+	if (catch err = connect(o, &c, true)) return report("connect", err, c.client);
 	defer c.drop();
 	DynamicArenaAllocator arena;
 	arena.init(mem, 8192);
