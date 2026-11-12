@@ -33,8 +33,12 @@ start:asyncua)
 	;;
 stop:*)
 	if [ -f "$pidfile" ]; then
-		kill -CONT "$(cat "$pidfile")" 2>/dev/null || true
-		kill "$(cat "$pidfile")" 2>/dev/null || true
+		pid=$(cat "$pidfile")
+		# only signal the process we started: it must be alive and its command line must name our peer
+		if kill -0 "$pid" 2>/dev/null && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE 'ci_server|asyncua_server'; then
+			kill -CONT "$pid" 2>/dev/null || true
+			kill "$pid" 2>/dev/null || true
+		fi
 		rm -f "$pidfile"
 	fi
 	;;
