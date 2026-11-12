@@ -171,6 +171,12 @@ fn ulong Rng.next(&self)
 }
 
 // True when the expression faults with exactly `expected` (a missing fault is a failed assertion at the call site).
+macro bool @ok(#expr)
+{
+	if (catch #expr) return false;
+	return true;
+}
+
 macro bool @fails(#expr, fault expected)
 {
 	if (catch err = #expr) return err == expected;
