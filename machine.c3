@@ -93,6 +93,12 @@ struct Response
 	ResponseHeader header;
 	bool local_timeout;          // true when header.service_result is our own Bad_Timeout, not the server's
 	char[] raw;                  // RAW: the bytes after the ResponseHeader, allocated from the request's allocator
+	union
+	{
+		DataValue[] values;                    // READ
+		StatusCode[] statuses;                 // WRITE (results)
+		CallMethodResult[] calls;              // CALL
+	}
 }
 
 enum EventKind
@@ -122,13 +128,43 @@ const uint MIN_RENEW_INTERVAL_MS = 1000;
 const uint MIN_LIFETIME_MS = 2000;                 // shorter revised lifetimes are treated as this (no renewal busy loop)
 const sz MAX_REMEMBERED_IDS = 16;
 
+// What a pending request is. The session kinds and the keep-alive are internal: no RESPONSE event is produced for them.
+enum PendingKind
+{
+	RAW,
+	READ,
+	WRITE,
+	CALL,
+	CREATE_SESSION,
+	ACTIVATE_SESSION,
+	CLOSE_SESSION,
+	KEEPALIVE,
+}
+
+fn bool is_internal(PendingKind k)
+{
+	switch (k)
+	{
+		case CREATE_SESSION:
+		case ACTIVATE_SESSION:
+		case CLOSE_SESSION:
+		case KEEPALIVE: return true;
+		default: return false;
+	}
+}
+
 struct PendingRequest
 {
 	uint request_id;
 	uint handle;
 	ulong deadline;
 	Allocator allocator;
+	PendingKind kind;
+	uint expected_id;            // encoding id of the response (0 for RAW)
+	sz count;                    // number of results the response must carry (0 = no check)
 }
+
+const double DEFAULT_SESSION_TIMEOUT_MS = 60000;
 
 struct Machine
 {
@@ -162,6 +198,18 @@ struct Machine
 	uint[16] renew_ids;
 	sz renew_id_count;
 	NodeId auth_token;           // null until a session exists
+	// session
+	DynamicArenaAllocator arena; // everything the session keeps from the server (endpoints, token) and a copy of the identity
+	bool arena_ready;
+	bool have_session;
+	bool closing_session;        // CloseSession is out, the CLO follows its answer
+	Identity identity;
+	EndpointDescription[] endpoints;
+	double session_timeout_ms;   // the revised timeout, with a local default for nonsense values
+	uint session_max_request;    // MaxRequestMessageSize of the server, 0 = none
+	ulong last_activity_ms;
+	bool keepalive_pending;
+	ulong nonce_state;
 	// requests
 	uint next_request_id;
 	uint next_handle;
@@ -193,6 +241,8 @@ fn void Machine.free(&self)
 {
 	self.reader.free();
 	self.outbox.free();
+	if (self.arena_ready) self.arena.free();
+	self.arena_ready = false;
 	if (self.pending.ptr != null) alloc::free(self.allocator, self.pending.ptr);
 	if (self.events.ptr != null) alloc::free(self.allocator, self.events.ptr);
 	if (self.endpoint_url.ptr != null) alloc::free(self.allocator, self.endpoint_url.ptr);
@@ -341,11 +391,6 @@ fn void? Machine.connect(&self, String endpoint_url, Now now)
 	self.state = State.HEL_SENT;
 	self.handshake_active = true;
 	self.handshake_deadline = now.mono_ms + self.config.handshake_timeout_ms;
-}
-
-fn void? Machine.open_session(&self, Identity identity, Now now)
-{
-	return BAD_STATE~;
 }
 
 // ---------- OpenSecureChannel ----------
@@ -509,7 +554,7 @@ fn void? Machine.feed_frames(&self, char[] data, Now now)
 	Message m;
 	while (self.reader.next(&m)!)
 	{
-		if (self.state == State.CLOSING) continue;      // nothing is expected after our CLO
+		if (self.state == State.CLOSING && !self.closing_session) continue;      // nothing is expected after our CLO
 		self.on_message(&m, now)!;
 	}
 }
@@ -532,6 +577,7 @@ fn void? Machine.on_message(&self, Message* m, Now now)
 		if (m.type != MsgType.OPN) return BAD_HANDSHAKE~;
 		return self.on_open_response(m, now, false);
 	}
+	if (self.state == State.CLOSING && m.type != MsgType.MSG) return;
 	switch (m.type)
 	{
 		case MSG:
@@ -602,6 +648,7 @@ fn void Machine.complete_with_status(&self, sz idx, StatusCode status, bool loca
 {
 	PendingRequest p = self.pending[idx];
 	self.remove_pending(idx);
+	if (is_internal(p.kind)) return;                 // session handling and keep-alive have no caller to tell
 	Event e = { .kind = EventKind.RESPONSE };
 	e.response.kind = ResponseKind.SERVICE_FAULT;
 	e.response.handle = p.handle;
@@ -626,58 +673,9 @@ fn void? Machine.on_abort(&self, Message* m, Now now)
 	sz idx = self.find_pending(m.request_id);
 	if (idx == self.pending_count) return;           // an abort for a request we no longer wait for
 	self.last_status = m.abort_status;
+	if (is_internal(self.pending[idx].kind) && self.pending[idx].kind != PendingKind.CLOSE_SESSION) return SERVICE_FAULT~;
 	self.complete_with_status(idx, m.abort_status, false);
-}
-
-fn void? Machine.on_service(&self, Message* m, Now now)
-{
-	self.check_token(m, now)!;
-	sz idx = self.find_pending(m.request_id);
-	if (idx == self.pending_count)
-	{
-		if (self.is_late(m.request_id)) return;      // answer to a request that already timed out
-		return REQUEST_ID_UNKNOWN~;
-	}
-	PendingRequest p = self.pending[idx];
-	Event e = { .kind = EventKind.RESPONSE };
-	bool no_memory = false;
-	@pool()
-	{
-		Decoder d = decoder(m.body, tmem, self.config.limits);
-		NodeId tid = d.get_nodeid()!;
-		ResponseHeader h = read_response_header(&d)!;
-		if (h.request_handle != p.handle) return BAD_RESPONSE~;
-		e.response.handle = p.handle;
-		e.response.header = h;
-		if (tid.kind == NodeIdKind.NUMERIC && tid.ns == 0 && tid.num == SERVICE_FAULT_ENCODING_ID)
-		{
-			if (d.remaining() != 0) return BAD_RESPONSE~;
-			e.response.kind = ResponseKind.SERVICE_FAULT;
-			self.last_status = h.service_result;
-		}
-		else
-		{
-			e.response.kind = ResponseKind.RAW;
-			sz rest = d.remaining();
-			char[]? copy = alloc::alloc_array_try(p.allocator, char, rest == 0 ? 1 : rest);
-			if (try c = copy)
-			{
-				if (rest > 0) mem::copy(c.ptr, d.input.ptr + d.pos, rest);
-				e.response.raw = c[:rest];
-			}
-			else
-			{
-				no_memory = true;                    // only this request fails, the channel is fine
-			}
-		}
-	};
-	if (no_memory)
-	{
-		self.complete_with_status(idx, STATUS_BAD_OUT_OF_MEMORY, false);
-		return;
-	}
-	self.remove_pending(idx);
-	self.push_event(e);
+	if (self.closing_session && self.pending_count == 0) self.begin_channel_close(now)!;
 }
 
 // ---------- failure and close ----------
@@ -741,6 +739,21 @@ fn void? Machine.close(&self, Now now)
 			return;
 		default:
 	}
+	if (self.have_session && (self.state == State.SESSION_CREATED || self.state == State.ACTIVATING || self.state == State.ACTIVE))
+	{
+		self.complete_all_pending();
+		self.queue_close_session(now)!;
+		self.state = State.CLOSING;
+		self.closing_session = true;
+		self.renew_pending = false;
+		return;
+	}
+	self.begin_channel_close(now)!;
+}
+
+// Queues the CloseSecureChannel chunk (no answer expected) and enters CLOSING.
+fn void? Machine.begin_channel_close(&self, Now now)
+{
 	uint rid = self.alloc_request_id();
 	uint handle = self.alloc_handle();
 	ByteBuf b;
@@ -751,6 +764,7 @@ fn void? Machine.close(&self, Now now)
 	e.put_close_secure_channel_request({ .request_header = self.request_header(now, handle, 0) })!;
 	self.writer.write_message(&self.outbox, MsgType.CLO, self.channel_id, self.token_id, rid, b.bytes())!;
 	self.state = State.CLOSING;
+	self.closing_session = false;
 	self.renew_pending = false;
 	if (self.out_pos >= self.outbox.len) self.finish_close();
 }
@@ -767,7 +781,7 @@ fn void Machine.consume_output(&self, sz n)
 	{
 		self.outbox.clear();
 		self.out_pos = 0;
-		if (self.state == State.CLOSING) self.finish_close();
+		if (self.state == State.CLOSING && !self.closing_session) self.finish_close();
 	}
 }
 
@@ -789,6 +803,11 @@ fn bool Machine.next_deadline(&self, ulong* out)
 			ulong expiry = self.token_issued_ms + self.lifetime_ms;
 			if (expiry < best) best = expiry;
 		}
+	}
+	if (self.state == State.ACTIVE && self.have_session && !self.keepalive_pending)
+	{
+		ulong t = self.last_activity_ms + self.keepalive_interval();
+		if (!have || t < best) { best = t; have = true; }
 	}
 	for (sz i = 0; i < self.pending_count; i++)
 	{
@@ -837,22 +856,41 @@ fn void? Machine.run_timers(&self, Now now)
 	{
 		if (self.pending[i].deadline <= now.mono_ms)
 		{
+			PendingKind kind = self.pending[i].kind;
+			if (is_internal(kind) && kind != PendingKind.CLOSE_SESSION) return TIMEOUT~;     // session setup and keep-alive must answer
 			self.remember_late(self.pending[i].request_id);
 			self.complete_with_status(i, STATUS_BAD_TIMEOUT, true);
+			if (kind == PendingKind.CLOSE_SESSION) self.begin_channel_close(now)!;          // no answer: close the channel anyway
 		}
 		else
 		{
 			i++;
 		}
 	}
+	if (self.state == State.ACTIVE && self.have_session && !self.keepalive_pending && now.mono_ms >= self.last_activity_ms + self.keepalive_interval())
+	{
+		self.queue_keepalive(now)!;
+	}
 }
 
 // ---------- requests ----------
-// Queues one service request whose body (everything after the RequestHeader) the caller encoded. Returns the handle.
-fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[] body)
+// The smaller of the peer's MaxMessageSize (ACK) and the session's MaxRequestMessageSize, ignoring zeros; 0 = no limit.
+fn sz Machine.request_size_limit(&self)
 {
-	if (self.state != State.CHANNEL_OPEN && self.state != State.ACTIVE) return BAD_STATE~;
-	if (self.pending_count >= self.config.limits.max_outstanding_requests) return TOO_MANY_PENDING~;
+	sz a = self.writer.max_message_size;
+	sz b = self.session_max_request;
+	if (a == 0) return b;
+	if (b == 0) return a;
+	return a < b ? a : b;
+}
+
+// Queues one encoded request (type id and request structure). Nothing is queued and nothing changes when a check fails.
+fn uint? Machine.queue_encoded(&self, Allocator alloc, Now now, uint handle, PendingKind kind, uint expected_id, sz count, char[] message_body)
+{
+	bool internal = is_internal(kind);
+	if (!internal && self.pending_count >= self.config.limits.max_outstanding_requests) return TOO_MANY_PENDING~;
+	sz limit = self.request_size_limit();
+	if (limit != 0 && message_body.len > limit) return MESSAGE_TOO_LARGE~;
 	if (self.pending_count == self.pending.len)
 	{
 		sz cap = self.pending.len == 0 ? 8 : self.pending.len * 2;
@@ -862,6 +900,18 @@ fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[
 		self.pending = fresh;
 	}
 	uint rid = self.alloc_request_id();
+	self.writer.write_message(&self.outbox, MsgType.MSG, self.channel_id, self.token_id, rid, message_body)!;
+	self.pending[self.pending_count] = { rid, handle, now.mono_ms + self.config.request_timeout_ms, alloc, kind, expected_id, count };
+	self.pending_count++;
+	self.last_activity_ms = now.mono_ms;
+	return handle;
+}
+
+// Queues one service request whose body (everything after the RequestHeader) the caller encoded. The answer comes back
+// as a RAW response. Returns the handle.
+fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[] body)
+{
+	if (self.state != State.CHANNEL_OPEN && self.state != State.ACTIVE) return BAD_STATE~;
 	uint handle = self.alloc_handle();
 	ByteBuf b;
 	b.init(self.allocator, 128 + body.len);
@@ -870,8 +920,5 @@ fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[
 	e.put_nodeid(type_id)!;
 	e.put_request_header(self.request_header(now, handle, self.config.request_timeout_ms))!;
 	e.put_raw(body)!;
-	self.writer.write_message(&self.outbox, MsgType.MSG, self.channel_id, self.token_id, rid, b.bytes())!;
-	self.pending[self.pending_count] = { rid, handle, now.mono_ms + self.config.request_timeout_ms, alloc };
-	self.pending_count++;
-	return handle;
+	return self.queue_encoded(alloc, now, handle, PendingKind.RAW, 0, 0, b.bytes());
 }
