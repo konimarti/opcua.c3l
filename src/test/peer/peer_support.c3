@@ -20,6 +20,7 @@ struct PeerConfig
 	String node_array;
 	String method_object;
 	String method;
+	String method_kind;      // "add" (two Int32 in, their sum out; the default) or "string" (one String in, a String out)
 }
 
 fn String peer_file_value(String text, String key)
@@ -62,6 +63,7 @@ fn PeerConfig peer_config()
 	c.node_array = peer_value(text, "OPCUA_NODE_ARRAY");
 	c.method_object = peer_value(text, "OPCUA_NODE_METHOD_OBJECT");
 	c.method = peer_value(text, "OPCUA_NODE_METHOD");
+	c.method_kind = peer_value(text, "OPCUA_METHOD_KIND");
 	c.configured = c.url.len > 0;
 	return c;
 }
@@ -106,4 +108,15 @@ fn Config peer_default_config()
 	Config c = default_config();
 	c.request_timeout_ms = 5000;
 	return c;
+}
+
+// Prints an observation and appends it to peers/observed.log (git-ignored), because a passing test shows no output.
+fn void peer_note(String text)
+{
+	io::printn(text);
+	File? f = file::open("peers/observed.log", "a");
+	if (catch err = f) return;
+	(void)f.write(text);
+	(void)f.write("\n");
+	(void)f.close();
 }
