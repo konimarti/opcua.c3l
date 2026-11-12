@@ -14,7 +14,9 @@ struct ScriptTransport (Transport)
 	uint lifetime;
 	bool silent;               // answer nothing
 	bool eof_when_empty;       // read reports the end of the stream once the inbox is empty
-	bool fail_browse_next;     // answer a BrowseNext (not a release) with a ServiceFault
+	bool fail_browse_next;
+	bool endless_pages;        // every BrowseNext page names another continuation point
+	bool write_times_out;      // write faults with TIMEOUT     // answer a BrowseNext (not a release) with a ServiceFault
 	bool closed;
 	bool close_seen;           // a CLO chunk arrived
 	uint release_seen;         // BrowseNext chunks with ReleaseContinuationPoints
@@ -66,6 +68,7 @@ fn usz? ScriptTransport.read(&self, char[] buf, Duration timeout) @dynamic
 fn void? ScriptTransport.write(&self, char[] data, Duration timeout) @dynamic
 {
 	if (self.closed) return CLOSED~;
+	if (self.write_times_out) return TIMEOUT~;
 	self.written.append(data)!;
 	self.reader.feed(data)!;
 	Message m;
@@ -137,6 +140,10 @@ fn void ScriptTransport.answer(&self, Message* m)
 					else if (self.fail_browse_next)
 					{
 						self.reply(s.service_fault(rid, handle, t, 0x80010000));
+					}
+					else if (self.endless_pages)
+					{
+						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload("02 00 00 00 CC DD", 1, ref_hex("b"))));
 					}
 					else
 					{
