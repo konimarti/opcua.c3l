@@ -1,0 +1,94 @@
+# CI: Linux, macOS and Windows build and test jobs plus a Linux job against the open62541 and asyncua peers.
+# Written for review; it is never pushed by the coder (Hermes shows Koni the diff first).
+name: ci
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "c3c release tag"
+        default: "v0.8.6"
+
+env:
+  C3_VERSION: ${{ github.event.inputs.version || 'v0.8.6' }}
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install c3c
+        run: |
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o c3.tar.gz   # asset name: verify
+          sudo mkdir -p /opt/c3 && sudo tar -xzf c3.tar.gz -C /opt/c3 --strip-components=1
+          echo "/opt/c3" >> "$GITHUB_PATH"
+      - run: c3c test
+      - run: c3c build uatool
+      - run: tools/check-lib-symbols.sh
+      - name: Generated files are up to date
+        run: c3c run uagen -- --check
+      - name: Tests under AddressSanitizer
+        run: c3c test --sanitize=address     # flag name: verify for 0.8.6
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install c3c
+        run: |
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-macos.zip" -o c3.zip   # asset name: verify
+          mkdir -p /opt/c3 && unzip -q c3.zip -d /opt/c3
+          echo "/opt/c3" >> "$GITHUB_PATH"
+      - run: c3c test
+      - run: c3c build uatool
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install c3c
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/c3lang/c3c/releases/download/$env:C3_VERSION/c3-windows.zip" -OutFile c3.zip   # asset name: verify
+          Expand-Archive c3.zip -DestinationPath C:\c3
+          "C:\c3" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - run: c3c test
+      - run: c3c build uatool
+
+  peers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install c3c
+        run: |
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o c3.tar.gz
+          sudo mkdir -p /opt/c3 && sudo tar -xzf c3.tar.gz -C /opt/c3 --strip-components=1
+          echo "/opt/c3" >> "$GITHUB_PATH"
+      - name: open62541 (cached build, run only)
+        uses: actions/cache@v4
+        id: open62541
+        with:
+          path: .work/peer/open62541
+          key: open62541-v1.5.10
+      - name: Build open62541 without encryption
+        if: steps.open62541.outputs.cache-hit != 'true'
+        run: |
+          # Build recipe (verify target names against the open62541 v1.5.10 tree): the example servers without encryption.
+          git clone --depth 1 --branch v1.5.10 https://github.com/open62541/open62541.git /tmp/open62541
+          cmake -S /tmp/open62541 -B /tmp/open62541/build -DCMAKE_BUILD_TYPE=Release -DUA_ENABLE_ENCRYPTION=OFF \
+            -DUA_BUILD_EXAMPLES=ON -DUA_BUILD_UNIT_TESTS=ON -DUA_NAMESPACE_ZERO=FULL
+          cmake --build /tmp/open62541/build --target ci_server access_control_server tutorial_server_firststeps -j 4
+          mkdir -p .work/peer/open62541
+          cp /tmp/open62541/build/bin/ci_server /tmp/open62541/build/bin/access_control_server /tmp/open62541/build/bin/tutorial_server_firststeps .work/peer/open62541/
+      - name: asyncua in a venv
+        run: |
+          python3 -m venv .work/peer/venv
+          .work/peer/venv/bin/pip install asyncua==2.1.0
+      - name: Suite against open62541
+        run: peers/run-peer-suite.sh open62541
+      - name: Suite against asyncua
+        run: peers/run-peer-suite.sh asyncua
