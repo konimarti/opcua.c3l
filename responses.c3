@@ -55,8 +55,8 @@ fn void? Machine.on_service(&self, Message* m, Now now)
 		bool late = self.is_late(m.request_id);          // answer to a request that already timed out
 		if (late || known_response_id(type_num))         // or a response nobody asked for (for example a Publish answer)
 		{
-			// The reply is dropped, but a lost session reported by a ServiceFault must not be missed.
-			if (type_num == SERVICE_FAULT_ENCODING_ID) return self.check_fault_for_lost_session(m, after_tid);
+			// The reply is dropped, but a lost session reported in its header must not be missed.
+			if (known_response_id(type_num)) return self.check_fault_for_lost_session(m, after_tid);
 			return;
 		}
 		return REQUEST_ID_UNKNOWN~;
@@ -190,7 +190,8 @@ fn void? Machine.dispatch_response(&self, sz idx, Message* m, uint type_num, sz 
 			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
 			BrowseNextResponse r = d.get_browse_next_response()!;
 			if (d.remaining() != 0) return BAD_RESPONSE~;
-			if (!status_is_bad(r.response_header.service_result) && r.results.len != p.count) return BAD_RESPONSE~;
+			// count 0: the points were released, the server answers with empty Results
+			if (p.count != 0 && !status_is_bad(r.response_header.service_result) && r.results.len != p.count) return BAD_RESPONSE~;
 			e.response.kind = ResponseKind.BROWSE_NEXT;
 			e.response.header = r.response_header;
 			e.response.browse_results = r.results;

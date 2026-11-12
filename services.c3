@@ -188,7 +188,8 @@ fn uint? Machine.send_browse(&self, Allocator alloc, Now now, BrowseDescription[
 	return self.queue_encoded(alloc, now, handle, PendingKind.BROWSE, BROWSE_RESPONSE_ENCODING_ID, nodes.len, b.bytes());
 }
 
-// With `release` the server frees the continuation points and answers with empty results (one per point).
+// With `release` the server frees the continuation points and answers with empty Results (10000-4 BrowseNext); without it
+// there is one result per point.
 fn uint? Machine.send_browse_next(&self, Allocator alloc, Now now, char[][] continuation_points, bool release)
 {
 	if (self.state != State.ACTIVE) return BAD_STATE~;
@@ -201,7 +202,7 @@ fn uint? Machine.send_browse_next(&self, Allocator alloc, Now now, char[][] cont
 	Encoder e = encoder(&b);
 	e.put_nodeid(nodeid_num(0, BROWSE_NEXT_REQUEST_ENCODING_ID))!;
 	e.put_browse_next_request(req)!;
-	return self.queue_encoded(alloc, now, handle, PendingKind.BROWSE_NEXT, BROWSE_NEXT_RESPONSE_ENCODING_ID, continuation_points.len, b.bytes());
+	return self.queue_encoded(alloc, now, handle, PendingKind.BROWSE_NEXT, BROWSE_NEXT_RESPONSE_ENCODING_ID, release ? 0 : continuation_points.len, b.bytes());
 }
 
 // One BrowsePath per entry of `paths`, all starting at `start`.
