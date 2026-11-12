@@ -52,12 +52,31 @@ fn void? Machine.on_service(&self, Message* m, Now now)
 	sz idx = self.find_pending(m.request_id);
 	if (idx == self.pending_count)
 	{
-		if (self.is_late(m.request_id)) return;          // answer to a request that already timed out
-		if (known_response_id(type_num)) return;         // a response nobody asked for (for example a Publish answer)
+		bool late = self.is_late(m.request_id);          // answer to a request that already timed out
+		if (late || known_response_id(type_num))         // or a response nobody asked for (for example a Publish answer)
+		{
+			// The reply is dropped, but a lost session reported by a ServiceFault must not be missed.
+			if (type_num == SERVICE_FAULT_ENCODING_ID) return self.check_fault_for_lost_session(m, after_tid);
+			return;
+		}
 		return REQUEST_ID_UNKNOWN~;
 	}
 	self.last_activity_ms = now.mono_ms;
 	return self.dispatch_response(idx, m, type_num, after_tid, now);
+}
+
+fn void? Machine.check_fault_for_lost_session(&self, Message* m, sz after_tid)
+{
+	@pool()
+	{
+		Decoder d = decoder(m.body[after_tid..], tmem, self.config.limits);
+		ResponseHeader h = read_response_header(&d)!;
+		if (is_session_lost(h.service_result))
+		{
+			self.last_status = h.service_result;
+			return SESSION_LOST~;
+		}
+	};
 }
 
 fn void? Machine.dispatch_response(&self, sz idx, Message* m, uint type_num, sz after_tid, Now now)

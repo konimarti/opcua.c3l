@@ -149,6 +149,11 @@ fn void? Machine.queue_activate(&self, Now now)
 	e.put_activate_session_request(req)!;
 	self.queue_encoded(self.allocator, now, handle, PendingKind.ACTIVATE_SESSION, ACTIVATE_SESSION_RESPONSE_ENCODING_ID, 0, b.bytes())!;
 	self.state = State.ACTIVATING;
+	// The password has been used: overwrite every copy (the token buffer, the request buffer, the copy of the identity).
+	if (tb.len > 0) mem::clear(tb.data.ptr, tb.len);
+	if (b.len > 0) mem::clear(b.data.ptr, b.len);
+	if (self.identity.password.len > 0) mem::clear(self.identity.password.ptr, self.identity.password.len);
+	self.identity.password = {};
 }
 
 fn void? Machine.on_activate_session(&self, sz idx, Message* m, sz after_tid, Now now)
