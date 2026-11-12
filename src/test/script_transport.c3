@@ -15,6 +15,8 @@ struct ScriptTransport (Transport)
 	bool silent;               // answer nothing
 	bool eof_when_empty;       // read reports the end of the stream once the inbox is empty
 	bool fail_browse_next;
+	uint total_pages;          // 0: the default two pages; N: a browse of exactly N pages, one reference each
+	uint pages_given;
 	bool endless_pages;        // every BrowseNext page names another continuation point
 	bool write_times_out;      // write faults with TIMEOUT     // answer a BrowseNext (not a release) with a ServiceFault
 	bool closed;
@@ -129,7 +131,10 @@ fn void ScriptTransport.answer(&self, Message* m)
 				case WRITE_REQUEST_ENCODING_ID: self.reply(s.msg(rid, handle, t, ID_WRITE_RESPONSE, WRITE_PAYLOAD));
 				case CALL_REQUEST_ENCODING_ID: self.reply(s.msg(rid, handle, t, ID_CALL_RESPONSE, CALL_PAYLOAD));
 				case GET_ENDPOINTS_REQUEST_ENCODING_ID: self.reply(s.msg(rid, handle, t, ID_GET_ENDPOINTS_RESPONSE, three_endpoints()));
-				case BROWSE_REQUEST_ENCODING_ID: self.reply(s.msg(rid, handle, t, ID_BROWSE_RESPONSE, browse_payload("02 00 00 00 CC DD", 1, ref_hex("a"))));
+				case BROWSE_REQUEST_ENCODING_ID:
+					self.pages_given = 1;
+					String first_cp = (self.total_pages == 0 || self.total_pages > 1) ? "02 00 00 00 CC DD" : NULL4;
+					self.reply(s.msg(rid, handle, t, ID_BROWSE_RESPONSE, browse_payload(first_cp, 1, ref_hex("a"))));
 				case BROWSE_NEXT_REQUEST_ENCODING_ID:
 					bool release = m.body[35] != 0;
 					if (release)
@@ -140,6 +145,12 @@ fn void ScriptTransport.answer(&self, Message* m)
 					else if (self.fail_browse_next)
 					{
 						self.reply(s.service_fault(rid, handle, t, 0x80010000));
+					}
+					else if (self.total_pages > 0)
+					{
+						self.pages_given++;
+						String cp = self.pages_given < self.total_pages ? "02 00 00 00 CC DD" : NULL4;
+						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload(cp, 1, ref_hex("b"))));
 					}
 					else if (self.endless_pages)
 					{
