@@ -98,6 +98,11 @@ struct Response
 		DataValue[] values;                    // READ
 		StatusCode[] statuses;                 // WRITE (results)
 		CallMethodResult[] calls;              // CALL
+		EndpointDescription[] endpoints;       // GET_ENDPOINTS
+		ApplicationDescription[] servers;      // FIND_SERVERS
+		ServerOnNetwork[] servers_on_network;  // FIND_SERVERS_ON_NETWORK
+		BrowseResult[] browse_results;         // BROWSE / BROWSE_NEXT
+		BrowsePathResult[] paths;              // TRANSLATE
 	}
 }
 
@@ -135,6 +140,12 @@ enum PendingKind
 	READ,
 	WRITE,
 	CALL,
+	GET_ENDPOINTS,
+	FIND_SERVERS,
+	FIND_SERVERS_ON_NETWORK,
+	BROWSE,
+	BROWSE_NEXT,
+	TRANSLATE,
 	CREATE_SESSION,
 	ACTIVATE_SESSION,
 	CLOSE_SESSION,

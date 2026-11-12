@@ -157,6 +157,51 @@ fn void? Machine.dispatch_response(&self, sz idx, Message* m, uint type_num, sz 
 			e.response.kind = ResponseKind.CALL;
 			e.response.header = r.response_header;
 			e.response.calls = r.results;
+		case GET_ENDPOINTS:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			GetEndpointsResponse r = d.get_get_endpoints_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.GET_ENDPOINTS;
+			e.response.header = r.response_header;
+			e.response.endpoints = r.endpoints;
+		case FIND_SERVERS:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			FindServersResponse r = d.get_find_servers_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.FIND_SERVERS;
+			e.response.header = r.response_header;
+			e.response.servers = r.servers;
+		case FIND_SERVERS_ON_NETWORK:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			FindServersOnNetworkResponse r = d.get_find_servers_on_network_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.FIND_SERVERS_ON_NETWORK;
+			e.response.header = r.response_header;
+			e.response.servers_on_network = r.servers;
+		case BROWSE:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			BrowseResponse r = d.get_browse_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			if (!status_is_bad(r.response_header.service_result) && r.results.len != p.count) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.BROWSE;
+			e.response.header = r.response_header;
+			e.response.browse_results = r.results;
+		case BROWSE_NEXT:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			BrowseNextResponse r = d.get_browse_next_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			if (!status_is_bad(r.response_header.service_result) && r.results.len != p.count) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.BROWSE_NEXT;
+			e.response.header = r.response_header;
+			e.response.browse_results = r.results;
+		case TRANSLATE:
+			Decoder d = decoder(m.body[after_tid..], p.allocator, self.config.limits);
+			TranslateBrowsePathsToNodeIdsResponse r = d.get_translate_browse_paths_to_node_ids_response()!;
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			if (!status_is_bad(r.response_header.service_result) && r.results.len != p.count) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.TRANSLATE;
+			e.response.header = r.response_header;
+			e.response.paths = r.results;
 		case CREATE_SESSION: return self.on_create_session(idx, m, after_tid, now);
 		case ACTIVATE_SESSION: return self.on_activate_session(idx, m, after_tid, now);
 		case KEEPALIVE: return self.on_keepalive(idx, m, after_tid, now);
