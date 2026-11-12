@@ -26,6 +26,8 @@ encryption, reverse connect, history, node management.
 
 ## Modules (files in the repository root, module `opcua`)
 
+The public names are listed in `API.md` (with the extras that are public only because C3 methods cannot be private).
+
 | file | purpose |
 |---|---|
 | `fault.c3`, `types.c3`, `codec.c3`, `codec_types.c3`, `variant.c3`, `nodeid.c3` | built-in types and the binary codec with its limits |
@@ -67,6 +69,50 @@ Every decoded value (strings, byte strings, arrays, structures with arrays) is a
 decoder, and nothing is released when a decode fails half way: the children of the elements decoded so far stay allocated.
 Pass an arena or the temporary allocator (for example a `DynamicArenaAllocator` per response) and free it as a whole.
 The `Machine` and the `Client` follow the same rule: the allocator you give to a call receives the decoded response.
+
+### Null versus empty
+
+A `String`, a ByteString and an array are **null** when their pointer is null (the zero value) and **empty** when the pointer is
+not null and the length is 0; the two are different on the wire (length -1 versus 0) and round-trip unchanged. Use `is_null`,
+`bytes_is_null`, `null_string()`, `empty_string()` and never `len == 0` when the difference matters. A default-initialised request
+struct therefore encodes every string and array as null.
+
+### Error model
+
+Faults (`faultdef` in `fault.c3`) are used for failures of the operation, grouped by prefix: codec (`TRUNCATED`, `BAD_LENGTH`,
+`BAD_ENCODING`, ...), framing (`BAD_CHUNK`, `BAD_HANDSHAKE`, `TOO_MANY_*`, ...), channel and session (`TOKEN_UNKNOWN`,
+`SESSION_LOST`, ...) and service (`SERVICE_FAULT`, `BAD_RESPONSE`, `EMPTY_REQUEST`, `WRITE_NOT_ALLOWED`, ...). The numeric status of
+a `ServiceFault`, an `ERR` message or a failing `ServiceResult` is in `Machine.last_status` / `Client.last_status`. **A Bad status
+of one node or one result is data**, not a fault: `DataValue.status`, `BrowseResult.status_code`, `CallMethodResult.status_code`.
+`TIMEOUT` comes from the deadlines of the machine (handshake, request, renewal) or from a transport read or write timeout, never
+from anywhere else. After a fault of `Machine.feed` or `handle_timeout` the machine is FAILED: drain its events (every pending
+request has been answered with `Bad_ConnectionClosed` first) and reconnect with a new machine.
+
+### Limits
+
+Every length a peer announces is checked against `Limits` and against the bytes that are actually there before anything is
+allocated. Each limit is accepted at its value and refused one above it (`limits_exact_test.c3`); a 0 in the browse fields of a
+hand-built `Limits` means the default.
+
+| field | default | refused with |
+|---|---|---|
+| `max_string_length` | 1 MiB | `BAD_LENGTH` |
+| `max_bytestring_length` | 16 MiB | `BAD_LENGTH` |
+| `max_array_length` | 1 000 000 | `BAD_LENGTH` |
+| `max_matrix_elements` | 1 000 000 | `BAD_LENGTH` |
+| `max_depth` | 32 | `DEPTH_EXCEEDED` |
+| `max_message_size` | 16 MiB (reassembled message) | `MESSAGE_TOO_LARGE` |
+| `max_chunk_count` | 64 | `TOO_MANY_CHUNKS` |
+| `max_pending_messages` | 16 (partial messages) | `TOO_MANY_PENDING` |
+| `max_reassembly_bytes` | 16 MiB (all partial messages together) | `MESSAGE_TOO_LARGE` |
+| `max_outstanding_requests` | 64 | `TOO_MANY_PENDING` |
+| `max_browse_pages` | 1000 (`BrowseNext` rounds of one `Client.browse`) | `TOO_MANY_PAGES` |
+| `max_browse_references` | 1 000 000 (references merged by one `Client.browse`) | `TOO_MANY_PAGES` |
+
+### Write and call safety
+
+`allow_write` (default false) is checked by the library before anything is queued: `send_write`, `send_call`, `Client.write`
+and `Client.call` fail with `WRITE_NOT_ALLOWED`. One flag covers Write and Call because a method call can change state.
 
 ### Using TcpTransport
 
