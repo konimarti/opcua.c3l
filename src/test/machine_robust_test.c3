@@ -189,3 +189,20 @@ fn void robust_terminal_states_have_no_deadline() @test
 	eat(&c);
 	assert(c.state == State.CLOSED && !c.next_deadline(&d));
 }
+
+// The channel renewal is not a session request: its header carries no AuthenticationToken even when a session exists.
+fn void robust_renewal_header_has_no_session_token() @test
+{
+	Machine m;
+	Config c = session_config();
+	m.init(mem, c);
+	defer m.free();
+	FakeServer s = fake_server();
+	open_active(&m, &s, "", identity_anonymous(), 0);
+	eat(&m);
+	m.handle_timeout(at(m.next_renew_ms))!!;
+	Message r = first_message(m.pending_output());
+	assert(r.type == MsgType.OPN);
+	assert(r.body[:4] == unhex("01 00 BE 01") && r.body[4:2] == unhex("00 00"), "a null AuthenticationToken");
+	assert(load_u32_test(r.body, 37) == 1, "RequestType Renew");
+}

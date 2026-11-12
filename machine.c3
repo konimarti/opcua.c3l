@@ -415,8 +415,10 @@ fn void? Machine.queue_open(&self, bool renew, Now now)
 	defer b.free();
 	Encoder e = encoder(&b);
 	e.put_nodeid(nodeid_num(0, OPEN_SECURE_CHANNEL_REQUEST_ENCODING_ID))!;
+	RequestHeader header = self.request_header(now, handle, self.config.request_timeout_ms);
+	header.authentication_token = {};                // the channel is not a session: no AuthenticationToken
 	OpenSecureChannelRequest req = {
-		.request_header = self.request_header(now, handle, self.config.request_timeout_ms),
+		.request_header = header,
 		.request_type = renew ? SecurityTokenRequestType.RENEW : SecurityTokenRequestType.ISSUE,
 		.security_mode = self.config.security_mode,
 		.requested_lifetime = self.config.channel_lifetime_ms,
