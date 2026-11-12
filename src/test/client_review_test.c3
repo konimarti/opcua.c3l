@@ -131,6 +131,8 @@ fn void client_fixes_frame_tracer_is_bounded() @test
 	out.init(tmem);
 	t.feed(unhex("4D 53 47 46 E8 03 00 00 00 00 00 00"), &out);                              // announces 1000 bytes, the bound is 100
 	assert(t.pending.len == 0 && out.len == 0, "an oversized frame is not buffered");
+	t.feed(alloc::alloc_array(tmem, char, 988), &out);                                       // the rest of the 1000 byte frame is dropped
+	assert(out.len == 0);
 	t.feed(unhex(B2_ACK), &out);
 	assert(((String)out.bytes()).contains("ACK F size=28"), "the next frame is traced");
 }
