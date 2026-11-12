@@ -12,7 +12,7 @@ fn Variant variant_i32_array(int[] v) => { .type = INT32, .is_array = true, .arr
 fn Variant variant_f64_array(double[] v) => { .type = DOUBLE, .is_array = true, .array.f64 = v };
 
 // Number of array elements (a null array has 0).
-fn sz array_data_len(BuiltIn t, ArrayData* a)
+fn sz array_data_len(BuiltIn t, ArrayData* a) @private
 {
 	switch (t)
 	{
@@ -45,7 +45,7 @@ fn sz array_data_len(BuiltIn t, ArrayData* a)
 	}
 }
 
-fn bool array_data_is_null(BuiltIn t, ArrayData* a)
+fn bool array_data_is_null(BuiltIn t, ArrayData* a) @private
 {
 	switch (t)
 	{
@@ -86,7 +86,7 @@ fn sz Variant.count(&self)
 }
 
 // Smallest wire size of one element: bounds the array length by the remaining input before anything is allocated.
-fn sz element_min_size(BuiltIn t)
+fn sz element_min_size(BuiltIn t) @private
 {
 	switch (t)
 	{

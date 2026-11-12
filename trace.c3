@@ -4,7 +4,7 @@ module opcua;
 // and chunk headers, service type ids and sizes. The AuthenticationToken of a request, the UserNameIdentityToken and the
 // whole ActivateSession body are replaced by "<redacted>", and the bytes of a message body are never printed.
 
-fn String service_name(uint id)
+fn String service_name(uint id) @private
 {
 	switch (id)
 	{

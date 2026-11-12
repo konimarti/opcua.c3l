@@ -7,7 +7,7 @@ const uint PUBLISH_RESPONSE_ENCODING_ID = 829;
 const uint SERVER_STATE_NODE_ID = 2259;               // Server_ServerStatus_State: the keep-alive reads it
 
 // Response type ids this library knows. A response with one of them and no request waiting for it is dropped quietly.
-fn bool known_response_id(uint id)
+fn bool known_response_id(uint id) @private
 {
 	switch (id)
 	{
@@ -31,7 +31,7 @@ fn bool known_response_id(uint id)
 }
 
 // BadSessionIdInvalid, BadSessionClosed, BadSessionNotActivated: the session is gone, a reconnect is needed.
-fn bool is_session_lost(StatusCode s)
+fn bool is_session_lost(StatusCode s) @private
 {
 	uint code = (uint)s & 0xFFFF0000;
 	return code == 0x80250000 || code == 0x80260000 || code == 0x80270000;

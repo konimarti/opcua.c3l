@@ -23,7 +23,7 @@ fn UserTokenPolicy* find_token_policy(EndpointDescription* endpoint, UserTokenTy
 	return null;
 }
 
-fn String? copy_string(Allocator a, String s)
+fn String? copy_string(Allocator a, String s) @private
 {
 	if (s.ptr == null) return s;
 	char[] c = alloc::alloc_array_try(a, char, s.len == 0 ? 1 : s.len)!;

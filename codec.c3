@@ -378,7 +378,7 @@ fn int? Decoder.get_array_len(&self, sz min_element_size)
 fn bool is_cont(char b) @local => (b & 0xC0) == 0x80;
 
 // Length of the valid UTF-8 sequence that starts at s[i], 0 if the bytes there are not valid.
-fn sz utf8_seq_len(char[] s, sz i)
+fn sz utf8_seq_len(char[] s, sz i) @private
 {
 	char b0 = s[i];
 	sz left = s.len - i;

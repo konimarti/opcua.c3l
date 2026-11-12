@@ -154,7 +154,7 @@ enum PendingKind
 	KEEPALIVE,
 }
 
-fn bool is_internal(PendingKind k)
+fn bool is_internal(PendingKind k) @private
 {
 	switch (k)
 	{
