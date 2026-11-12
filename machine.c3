@@ -27,7 +27,7 @@ struct Config
 	uint request_timeout_ms;          // default 10000; TimeoutHint and local deadline
 	uint handshake_timeout_ms;        // default 10000: HEL->ACK and OPN->response deadlines
 	uint max_response_message_size;   // CreateSession.MaxResponseMessageSize, default 0 = no limit
-	ulong nonce_seed;                 // PRNG seed for nonces, filled by the adapter
+	ulong nonce_seed;                 // PRNG seed for the client nonce; the adapter must fill it from OS entropy (0 gives the same nonce every time)
 	bool allow_cleartext_password;    // USERNAME over policy None is refused unless set
 	bool allow_write;                 // default false; Write and Call refused with WRITE_NOT_ALLOWED when false
 	bool validate_utf8;               // default true; false: invalid UTF-8 is replaced by U+FFFD instead of BAD_ENCODING
@@ -885,6 +885,9 @@ fn sz Machine.request_size_limit(&self)
 }
 
 // Queues one encoded request (type id and request structure). Nothing is queued and nothing changes when a check fails.
+// The size limit is checked against the encoded request itself (type id and structure), not against the chunk and security
+// headers added per chunk: a request of exactly the limit passes here and may still be refused by a strict server. The chunk
+// writer uses the same convention.
 fn uint? Machine.queue_encoded(&self, Allocator alloc, Now now, uint handle, PendingKind kind, uint expected_id, sz count, char[] message_body)
 {
 	bool internal = is_internal(kind);
