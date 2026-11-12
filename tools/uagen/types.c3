@@ -42,6 +42,7 @@ struct EnumeratedType
 {
 	String name;
 	int length_in_bits;
+	bool is_option_set;
 	List{EnumValue} values;
 }
 

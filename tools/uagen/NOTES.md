@@ -74,3 +74,12 @@ Roots (38 types from DESIGN 8.2 and M4a step 4, defined in `tools/uagen/roots.tx
 ## 6. NodeIds Verification
 
 - `ReadRequest_Encoding_DefaultBinary`: **631** (verified against `schema/NodeIds.csv`).
+
+## 7. Generation (emitters)
+
+- `uagen --generate` writes `gen_types.c3`, `gen_codec.c3` and `gen_ids.c3` into the repository root; `uagen --check` regenerates in memory and compares with the committed files (`up to date`, exit 0; otherwise the first differing line and exit 1).
+- Output is a pure function of `schema/` and `roots.txt`: closure order is sorted, no timestamps, the header repeats `schema/SOURCE.txt`.
+- Names: type names unchanged, fields snake_case (`ServerURI` -> `server_uri`), C3 keywords get a trailing `_` (`Type` -> `type_`), enum members UPPER_SNAKE.
+- Enumerations become `constdef` over a signed integer of the wire width, so unknown wire values survive a round trip. `IsOptionSet` types are not generated: fields of that type are plain unsigned integers.
+- Arrays are slices; a null slice encodes as -1 and an empty slice as 0. Element counts go through `Decoder.get_array_len(min_element_size)`, so limits and the remaining-bytes bound apply before allocation.
+- `status_name` ignores the info bits (low 16 bits) of a status code.

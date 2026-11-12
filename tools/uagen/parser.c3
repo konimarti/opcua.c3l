@@ -122,6 +122,7 @@ fn void? parse_bsd(TypeTable* table, String content)
 					en.length_in_bits = b;
 				}
 			}
+			if (try opt = child.attr("IsOptionSet")) en.is_option_set = opt == "true";
 			en.values.init(table.allocator);
 
 			foreach (vnode : child.children)

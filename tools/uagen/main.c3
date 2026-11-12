@@ -42,6 +42,8 @@ fn int main(String[] args)
 	bool list_types = false;
 	bool list_unsupported = false;
 	bool show_stats = false;
+	bool generate = false;
+	bool check = false;
 
 	String bsd_path = "schema/Opc.Ua.Types.bsd";
 	String nodeids_path = "schema/NodeIds.csv";
@@ -62,6 +64,14 @@ fn int main(String[] args)
 		else if (arg == "--stats")
 		{
 			show_stats = true;
+		}
+		else if (arg == "--generate")
+		{
+			generate = true;
+		}
+		else if (arg == "--check")
+		{
+			check = true;
 		}
 	}
 
@@ -106,6 +116,36 @@ fn int main(String[] args)
 	foreach (c : closure)
 	{
 		closure_set.add(c);
+	}
+
+	if (generate || check)
+	{
+		String source_text = read_text_file("schema/SOURCE.txt") ?? "";
+		String? ids_text = read_text_file(nodeids_path);
+		String? status_text = read_text_file(statuscode_path);
+		if (catch e1 = ids_text)
+		{
+			io::printfn("Error: unable to load %s", nodeids_path);
+			return 1;
+		}
+		if (catch e2 = status_text)
+		{
+			io::printfn("Error: unable to load %s", statuscode_path);
+			return 1;
+		}
+		NodeIdsTable nodeids;
+		parse_nodeids_csv(&nodeids, mem, ids_text);
+		defer nodeids.free();
+		StatusCodeTable statuses;
+		parse_statuscode_csv(&statuses, mem, status_text);
+		defer statuses.free();
+		Generated[3]? outputs = build_outputs(&table, closure, source_text, &nodeids, &statuses);
+		if (catch err = outputs)
+		{
+			io::printfn("Error: generation failed: %s", last_error_msg);
+			return 1;
+		}
+		return run_generate(outputs, check);
 	}
 
 	if (list_types)
