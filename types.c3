@@ -175,12 +175,8 @@ struct DataValue
 	ushort server_pico;
 }
 
-// ---------- security ----------
-constdef MessageSecurityMode : uint { INVALID = 0, NONE = 1, SIGN = 2, SIGN_AND_ENCRYPT = 3 }
-
+// ---------- security policies (MessageSecurityMode and UserTokenType are generated) ----------
 const String POLICY_NONE = "http://opcfoundation.org/UA/SecurityPolicy#None";
 const String POLICY_BASIC256SHA256 = "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256";
 const String POLICY_AES128_SHA256_RSAOAEP = "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep";
 const String POLICY_AES256_SHA256_RSAPSS = "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss";
-
-constdef UserTokenType : uint { ANONYMOUS = 0, USERNAME = 1, CERTIFICATE = 2, ISSUED_TOKEN = 3 }

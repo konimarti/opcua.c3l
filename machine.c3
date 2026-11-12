@@ -75,16 +75,9 @@ struct Identity
 }
 
 fn Identity identity_anonymous() => { .type = UserTokenType.ANONYMOUS };
-fn Identity identity_username(String user, String pass) => { .type = UserTokenType.USERNAME, .username = user, .password = pass };
+fn Identity identity_username(String user, String pass) => { .type = UserTokenType.USER_NAME, .username = user, .password = pass };
 
 // ---- responses ----
-struct ResponseHeader
-{
-	StatusCode service_result;
-	UaDateTime timestamp;
-	uint request_handle;
-}
-
 enum ResponseKind
 {
 	GET_ENDPOINTS, FIND_SERVERS, FIND_SERVERS_ON_NETWORK, BROWSE, BROWSE_NEXT,
@@ -122,10 +115,6 @@ struct Event
 const StatusCode STATUS_BAD_TIMEOUT = (StatusCode)0x800A0000;
 const StatusCode STATUS_BAD_CONNECTION_CLOSED = (StatusCode)0x80AE0000;
 
-const uint ID_SERVICE_FAULT = 397;
-const uint ID_OPEN_SECURE_CHANNEL_REQUEST = 446;
-const uint ID_OPEN_SECURE_CHANNEL_RESPONSE = 449;
-const uint ID_CLOSE_SECURE_CHANNEL_REQUEST = 452;
 
 const uint DEFAULT_CHANNEL_LIFETIME_MS = 600000;   // used when the server answers RevisedLifetime 0
 const uint MIN_RENEW_INTERVAL_MS = 1000;
@@ -274,28 +263,18 @@ fn uint Machine.alloc_handle(&self)
 }
 
 // ---------- header helpers ----------
-fn void? Machine.put_request_header(&self, Encoder* e, Now now, uint handle, uint timeout_hint)
+fn RequestHeader Machine.request_header(&self, Now now, uint handle, uint timeout_hint)
 {
-	e.put_nodeid(self.auth_token)!;
-	e.put_datetime(now.utc)!;
-	e.put_u32(handle)!;
-	e.put_u32(0)!;                          // ReturnDiagnostics
-	e.put_string(null_string())!;           // AuditEntryId
-	e.put_u32(timeout_hint)!;
-	ExtensionObject none;
-	e.put_extension_object(none)!;          // AdditionalHeader
+	return { .authentication_token = self.auth_token, .timestamp = now.utc, .request_handle = handle, .timeout_hint = timeout_hint };
 }
 
-fn ResponseHeader? get_response_header(Decoder* d) @private
+// The ResponseHeader without the parts that point into temporary memory (diagnostics, string table, additional header).
+fn ResponseHeader? read_response_header(Decoder* d) @private
 {
-	ResponseHeader h;
-	h.timestamp = d.get_datetime()!;
-	h.request_handle = d.get_u32()!;
-	h.service_result = (StatusCode)d.get_u32()!;
-	(void)d.get_diagnostic_info()!;
-	int n = d.get_array_len(4)!;
-	for (int i = 0; i < n; i++) (void)d.get_string()!;
-	(void)d.get_extension_object()!;
+	ResponseHeader h = d.get_response_header()!;
+	h.service_diagnostics = {};
+	h.string_table = {};
+	h.additional_header = {};
 	return h;
 }
 
@@ -334,13 +313,14 @@ fn void? Machine.queue_open(&self, bool renew, Now now)
 	b.init(self.allocator, 128);
 	defer b.free();
 	Encoder e = encoder(&b);
-	e.put_nodeid(nodeid_num(0, ID_OPEN_SECURE_CHANNEL_REQUEST))!;
-	self.put_request_header(&e, now, handle, self.config.request_timeout_ms)!;
-	e.put_u32(0)!;                                   // ClientProtocolVersion
-	e.put_u32(renew ? 1 : 0)!;                       // RequestType: Issue / Renew
-	e.put_u32((uint)self.config.security_mode)!;
-	e.put_bytestring(null_bytes())!;                 // ClientNonce
-	e.put_u32(self.config.channel_lifetime_ms)!;
+	e.put_nodeid(nodeid_num(0, OPEN_SECURE_CHANNEL_REQUEST_ENCODING_ID))!;
+	OpenSecureChannelRequest req = {
+		.request_header = self.request_header(now, handle, self.config.request_timeout_ms),
+		.request_type = renew ? SecurityTokenRequestType.RENEW : SecurityTokenRequestType.ISSUE,
+		.security_mode = self.config.security_mode,
+		.requested_lifetime = self.config.channel_lifetime_ms,
+	};
+	e.put_open_secure_channel_request(req)!;
 	self.writer.write_open(&self.outbox, self.channel_id, rid, b.bytes())!;
 	if (renew)
 	{
@@ -405,14 +385,14 @@ fn void? Machine.on_open_response(&self, Message* m, Now now, bool renew)
 		Decoder d = decoder(m.body, tmem, self.config.limits);
 		NodeId tid = d.get_nodeid()!;
 		if (tid.kind != NodeIdKind.NUMERIC || tid.ns != 0) return BAD_RESPONSE~;
-		if (tid.num == ID_SERVICE_FAULT)
+		if (tid.num == SERVICE_FAULT_ENCODING_ID)
 		{
-			ResponseHeader fh = get_response_header(&d)!;
+			ResponseHeader fh = read_response_header(&d)!;
 			self.last_status = fh.service_result;
 			return SERVICE_FAULT~;
 		}
-		if (tid.num != ID_OPEN_SECURE_CHANNEL_RESPONSE) return BAD_RESPONSE~;
-		ResponseHeader h = get_response_header(&d)!;
+		if (tid.num != OPEN_SECURE_CHANNEL_RESPONSE_ENCODING_ID) return BAD_RESPONSE~;
+		ResponseHeader h = read_response_header(&d)!;
 		if (h.request_handle != self.open_handle && !renew) return BAD_RESPONSE~;
 		if (!status_is_good(h.service_result))
 		{
@@ -606,11 +586,11 @@ fn void? Machine.on_service(&self, Message* m, Now now)
 	{
 		Decoder d = decoder(m.body, tmem, self.config.limits);
 		NodeId tid = d.get_nodeid()!;
-		ResponseHeader h = get_response_header(&d)!;
+		ResponseHeader h = read_response_header(&d)!;
 		if (h.request_handle != p.handle) return BAD_RESPONSE~;
 		e.response.handle = p.handle;
 		e.response.header = h;
-		if (tid.kind == NodeIdKind.NUMERIC && tid.ns == 0 && tid.num == ID_SERVICE_FAULT)
+		if (tid.kind == NodeIdKind.NUMERIC && tid.ns == 0 && tid.num == SERVICE_FAULT_ENCODING_ID)
 		{
 			if (d.remaining() != 0) return BAD_RESPONSE~;
 			e.response.kind = ResponseKind.SERVICE_FAULT;
@@ -696,8 +676,8 @@ fn void? Machine.close(&self, Now now)
 	b.init(self.allocator, 64);
 	defer b.free();
 	Encoder e = encoder(&b);
-	e.put_nodeid(nodeid_num(0, ID_CLOSE_SECURE_CHANNEL_REQUEST))!;
-	self.put_request_header(&e, now, handle, 0)!;
+	e.put_nodeid(nodeid_num(0, CLOSE_SECURE_CHANNEL_REQUEST_ENCODING_ID))!;
+	e.put_close_secure_channel_request({ .request_header = self.request_header(now, handle, 0) })!;
 	self.writer.write_message(&self.outbox, MsgType.CLO, self.channel_id, self.token_id, rid, b.bytes())!;
 	self.state = State.CLOSING;
 	self.renew_pending = false;
@@ -815,7 +795,7 @@ fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[
 	defer b.free();
 	Encoder e = encoder(&b);
 	e.put_nodeid(type_id)!;
-	self.put_request_header(&e, now, handle, self.config.request_timeout_ms)!;
+	e.put_request_header(self.request_header(now, handle, self.config.request_timeout_ms))!;
 	e.put_raw(body)!;
 	self.writer.write_message(&self.outbox, MsgType.MSG, self.channel_id, self.token_id, rid, b.bytes())!;
 	self.pending[self.pending_count] = { rid, handle, now.mono_ms + self.config.request_timeout_ms, alloc };
