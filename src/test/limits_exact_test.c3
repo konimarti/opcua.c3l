@@ -176,7 +176,7 @@ fn void limits_exact_browse_pages_and_references() @test
 		}
 		else
 		{
-			assert(@fails(c.browse(&arena, nodeid_num(0, 85)), TOO_MANY_PAGES), "one reference more than the limit");
+			assert(@fails(c.browse(&arena, nodeid_num(0, 85)), TOO_MANY_REFERENCES), "one reference more than the limit");
 		}
 	}
 }
@@ -187,5 +187,5 @@ fn void limits_defaults_are_documented_values() @test
 	assert(l.max_string_length == 1 << 20 && l.max_bytestring_length == 16 << 20 && l.max_array_length == 1_000_000);
 	assert(l.max_matrix_elements == 1_000_000 && l.max_depth == 32 && l.max_message_size == 16 << 20 && l.max_chunk_count == 64);
 	assert(l.max_pending_messages == 16 && l.max_reassembly_bytes == 16 << 20 && l.max_outstanding_requests == 64);
-	assert(l.max_browse_pages == 1000 && l.max_browse_references == 1_000_000);
+	assert(l.max_browse_pages == 1000 && l.max_browse_references == 1_000_000 && l.max_browse_bytes == 256 << 20);
 }

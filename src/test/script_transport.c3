@@ -15,6 +15,7 @@ struct ScriptTransport (Transport)
 	bool silent;               // answer nothing
 	bool eof_when_empty;       // read reports the end of the stream once the inbox is empty
 	bool fail_browse_next;
+	uint name_length;          // 0: one character reference names; N: names of N characters
 	uint total_pages;          // 0: the default two pages; N: a browse of exactly N pages, one reference each
 	uint pages_given;
 	bool endless_pages;        // every BrowseNext page names another continuation point
@@ -134,7 +135,7 @@ fn void ScriptTransport.answer(&self, Message* m)
 				case BROWSE_REQUEST_ENCODING_ID:
 					self.pages_given = 1;
 					String first_cp = (self.total_pages == 0 || self.total_pages > 1) ? "02 00 00 00 CC DD" : NULL4;
-					self.reply(s.msg(rid, handle, t, ID_BROWSE_RESPONSE, browse_payload(first_cp, 1, ref_hex("a"))));
+					self.reply(s.msg(rid, handle, t, ID_BROWSE_RESPONSE, browse_payload(first_cp, 1, self.ref_name("a"))));
 				case BROWSE_NEXT_REQUEST_ENCODING_ID:
 					bool release = m.body[35] != 0;
 					if (release)
@@ -150,18 +151,26 @@ fn void ScriptTransport.answer(&self, Message* m)
 					{
 						self.pages_given++;
 						String cp = self.pages_given < self.total_pages ? "02 00 00 00 CC DD" : NULL4;
-						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload(cp, 1, ref_hex("b"))));
+						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload(cp, 1, self.ref_name("b"))));
 					}
 					else if (self.endless_pages)
 					{
-						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload("02 00 00 00 CC DD", 1, ref_hex("b"))));
+						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload("02 00 00 00 CC DD", 1, self.ref_name("b"))));
 					}
 					else
 					{
-						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload(NULL4, 1, ref_hex("b"))));
+						self.reply(s.msg(rid, handle, t, ID_BROWSE_NEXT_RESPONSE, browse_payload(NULL4, 1, self.ref_name("b"))));
 					}
 				default:
 			}
 		default:
 	}
+}
+
+fn String ScriptTransport.ref_name(&self, String short_name)
+{
+	if (self.name_length == 0) return ref_hex(short_name);
+	DString d = dstring::temp();
+	for (uint i = 0; i < self.name_length; i++) d.append("n");
+	return ref_hex(d.str_view());
 }

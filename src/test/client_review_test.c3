@@ -55,7 +55,7 @@ fn void client_fixes_browse_is_bounded() @test
 	Client* e = connect_script(&st2, many);
 	defer e.free();
 	e.open_session()!!;
-	assert(@fails(e.browse(&arena, nodeid_num(0, 85)), TOO_MANY_PAGES));
+	assert(@fails(e.browse(&arena, nodeid_num(0, 85)), TOO_MANY_REFERENCES));
 	assert(st2.release_seen == 1);
 	// the defaults are generous and a normal browse is not affected
 	assert(default_limits().max_browse_pages == 1000 && default_limits().max_browse_references == 1_000_000);
