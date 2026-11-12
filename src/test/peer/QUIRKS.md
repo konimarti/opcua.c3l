@@ -37,6 +37,38 @@
   (`TIMEOUT`) instead of sending a request the server would drop. Recorded line:
   `OBSERVED: read after an idle period without service() failed with opcua::TIMEOUT`.
 
+## asyncua 2.1.0 (peers/asyncua_server.py, SecurityPolicy None, anonymous and user name peter / peter123)
+* ACK: ReceiveBufferSize and SendBufferSize **65535** (open62541: 65536), MaxMessageSize 104 857 600, MaxChunkCount 1601. The
+  machine accepts both (the minimum is 8192).
+* OPN: the first sequence number is 1, the lifetime requested (3 600 000 ms) is kept; open62541 revises it to 600 000 ms. A
+  requested 4 000 ms is kept by both.
+* CreateSession announces `MaxRequestMessageSize` 65536 but accepts much larger requests (a 100 000 element Int32 array write of
+  about 400 KB in chunks of 8192 bytes succeeds). The machine applies the announced limit by default (`MESSAGE_TOO_LARGE`);
+  `Config.ignore_server_request_limit` switches that off and the multi-chunk peer test uses it.
+* The user name token policy names the None security policy (`SecurityPolicyUri` = `#None`); the password still travels in
+  clear text. The machine accepts that with `allow_cleartext_password` (found by this peer; before, any non-empty policy URI was
+  refused). open62541 leaves the field empty.
+* GetEndpoints: the endpoint URL is the one that was asked for (`localhost` stays `localhost`), but a request with a path the
+  server does not know (`/wrong/path`) is answered with the configured URL `opc.tcp://127.0.0.1:4841/`. The client never reconnects
+  to the host in an answer (it only returns the endpoints), so both are harmless. open62541 echoes the requested URL.
+* A wrong endpoint path in the HEL is accepted by both servers.
+* BrowseNext with an invalid continuation point is answered with a ServiceFault `BadUserAccessDenied` (asyncua's permission
+  rules do not list BrowseNext; its own client gets the same). open62541 answers per result with `BadContinuationPointInvalid`
+  (data). The peer test accepts both and records which one it saw.
+* Browse ignores `RequestedMaxReferencesPerNode`: all references come in the first answer, so continuation points are only
+  exercised with open62541.
+* The Add method checks its argument count with a Python TypeError (a call with one argument is answered with a Bad status).
+
+## Renewal (both peers, requested lifetime 4 000 ms)
+* Ten seconds with `service()`: 3 renewals, 0 renew failures, every read good.
+* Peer stopped (SIGSTOP) at 2 800 ms and continued at 3 700 ms: 2 `CHANNEL_RENEW_FAILED` events, then the renewal is answered and
+  the channel recovers (1 renewal at about 3 700 ms, before the old token's end at 4 000 ms). The request timeout was 300 ms.
+
+## Skips
+* `peer_multichunk_array` is skipped against open62541's ci_server: it has no array node (reason printed:
+  `SKIP: no OPCUA_NODE_ARRAY configured`). `peer_call_wrong_argument_types` is skipped when the method takes a String (open62541).
+  Against asyncua nothing is skipped.
+
 ## Client
 * The channel renewal request carries no AuthenticationToken even when a session exists (confirmed: the server accepts the
   renewals in the idle test).
