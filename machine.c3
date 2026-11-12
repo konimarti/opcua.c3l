@@ -1,0 +1,824 @@
+module opcua;
+
+// Sans-IO core. No I/O, no threads, no clock reads: time arrives as `Now`. Time units inside the core are integer
+// milliseconds (the adapter converts from the clock, so the core has no time dependency).
+// Every call that can change state (connect, feed, handle_timeout, close, send_*) may queue events: drain `poll_event`
+// after each one. A fault returned by `feed` or `handle_timeout` has already moved the machine to FAILED.
+
+struct Now
+{
+	ulong mono_ms;     // monotonic milliseconds (timeouts, renewal)
+	UaDateTime utc;    // wall clock for RequestHeader.timestamp
+}
+
+struct Config
+{
+	String application_uri;           // default "urn:opcua.c3l:client"
+	String application_name;          // default "opcua.c3l client"
+	String product_uri;               // default "urn:opcua.c3l"
+	String session_name;              // default "opcua.c3l session"
+	uint receive_buffer_size;         // default 65536 (>= 8192)
+	uint send_buffer_size;            // default 65536
+	Limits limits;
+	MessageSecurityMode security_mode; // default NONE (the only mode in v1; anything else -> SECURITY_UNSUPPORTED)
+	String security_policy_uri;       // default POLICY_NONE
+	uint channel_lifetime_ms;         // RequestedLifetime, default 3600000 (10000-4 5.5.2)
+	double session_timeout_ms;        // default 1200000
+	uint request_timeout_ms;          // default 10000; TimeoutHint and local deadline
+	uint handshake_timeout_ms;        // default 10000: HEL->ACK and OPN->response deadlines
+	uint max_response_message_size;   // CreateSession.MaxResponseMessageSize, default 0 = no limit
+	ulong nonce_seed;                 // PRNG seed for nonces, filled by the adapter
+	bool allow_cleartext_password;    // USERNAME over policy None is refused unless set
+	bool allow_write;                 // default false; Write and Call refused with WRITE_NOT_ALLOWED when false
+	bool validate_utf8;               // default true; false: invalid UTF-8 is replaced by U+FFFD instead of BAD_ENCODING
+	bool strict_types;                // default false; true: unknown ExtensionObject types fail with UNKNOWN_TYPE
+}
+
+fn Config default_config() => {
+	.application_uri = "urn:opcua.c3l:client",
+	.application_name = "opcua.c3l client",
+	.product_uri = "urn:opcua.c3l",
+	.session_name = "opcua.c3l session",
+	.receive_buffer_size = 65536,
+	.send_buffer_size = 65536,
+	.limits = default_limits(),
+	.security_mode = MessageSecurityMode.NONE,
+	.security_policy_uri = POLICY_NONE,
+	.channel_lifetime_ms = 3600000,
+	.session_timeout_ms = 1200000,
+	.request_timeout_ms = 10000,
+	.handshake_timeout_ms = 10000,
+	.validate_utf8 = true,
+};
+
+enum State
+{
+	IDLE,
+	HEL_SENT,          // waiting for ACK
+	OPN_SENT,          // waiting for OpenSecureChannelResponse
+	CHANNEL_OPEN,      // discovery services allowed
+	SESSION_CREATING,
+	SESSION_CREATED,
+	ACTIVATING,
+	ACTIVE,            // session services allowed
+	CLOSING,           // CloseSession sent / CLO sent
+	CLOSED,
+	FAILED,
+}
+
+// Identity token for ActivateSession (10000-4 5.6.3; 10000-6 7.35)
+struct Identity
+{
+	UserTokenType type;
+	String username;
+	String password;   // sent as-is under policy None: refused unless Config.allow_cleartext_password
+}
+
+fn Identity identity_anonymous() => { .type = UserTokenType.ANONYMOUS };
+fn Identity identity_username(String user, String pass) => { .type = UserTokenType.USERNAME, .username = user, .password = pass };
+
+// ---- responses ----
+struct ResponseHeader
+{
+	StatusCode service_result;
+	UaDateTime timestamp;
+	uint request_handle;
+}
+
+enum ResponseKind
+{
+	GET_ENDPOINTS, FIND_SERVERS, FIND_SERVERS_ON_NETWORK, BROWSE, BROWSE_NEXT,
+	TRANSLATE, READ, WRITE, CALL, SERVICE_FAULT,
+	RAW,                         // a service answered with its undecoded body (transport and channel tests)
+}
+
+// Tagged by `kind`: read only the member that matches.
+struct Response
+{
+	ResponseKind kind;
+	uint handle;                 // returned by the send_* call
+	ResponseHeader header;
+	bool local_timeout;          // true when header.service_result is our own Bad_Timeout, not the server's
+	char[] raw;                  // RAW: the bytes after the ResponseHeader, allocated from the request's allocator
+}
+
+enum EventKind
+{
+	CHANNEL_OPEN,
+	CHANNEL_RENEWED,
+	CHANNEL_RENEW_FAILED,   // a renewal got no answer; the old token is still valid, retrying. Warning only.
+	SESSION_ACTIVE,
+	RESPONSE,
+	CLOSED,        // orderly
+	FAILED,        // fatal; Machine.failure holds the fault. Every pending request was completed first (RESPONSE, Bad_ConnectionClosed)
+}
+
+struct Event
+{
+	EventKind kind;
+	Response response;     // RESPONSE only
+}
+
+const StatusCode STATUS_BAD_TIMEOUT = (StatusCode)0x800A0000;
+const StatusCode STATUS_BAD_CONNECTION_CLOSED = (StatusCode)0x80AE0000;
+
+const uint ID_SERVICE_FAULT = 397;
+const uint ID_OPEN_SECURE_CHANNEL_REQUEST = 446;
+const uint ID_OPEN_SECURE_CHANNEL_RESPONSE = 449;
+const uint ID_CLOSE_SECURE_CHANNEL_REQUEST = 452;
+
+const uint DEFAULT_CHANNEL_LIFETIME_MS = 600000;   // used when the server answers RevisedLifetime 0
+const uint MIN_RENEW_INTERVAL_MS = 1000;
+const uint MIN_LIFETIME_MS = 2000;                 // shorter revised lifetimes are treated as this (no renewal busy loop)
+const sz MAX_REMEMBERED_IDS = 16;
+
+struct PendingRequest
+{
+	uint request_id;
+	uint handle;
+	ulong deadline;
+	Allocator allocator;
+}
+
+struct Machine
+{
+	Allocator allocator;
+	Config config;
+	State state;
+	fault failure;               // set when state == FAILED
+	StatusCode last_status;      // last ERR / ServiceFault / failing ServiceResult status
+	ByteBuf outbox;
+	sz out_pos;                  // bytes of outbox the transport already took
+	ChunkReader reader;
+	ChunkWriter writer;
+	ChunkSecurity security;
+	String endpoint_url;
+	// handshake
+	ulong handshake_deadline;
+	bool handshake_active;
+	// channel
+	uint channel_id;
+	uint token_id;
+	uint lifetime_ms;
+	ulong token_issued_ms;
+	bool have_old_token;
+	uint old_token_id;
+	ulong old_token_expires_ms;
+	bool renew_pending;
+	ulong next_renew_ms;
+	ulong renew_retry_ms;
+	uint open_request_id;
+	uint open_handle;
+	uint[16] renew_ids;
+	sz renew_id_count;
+	NodeId auth_token;           // null until a session exists
+	// requests
+	uint next_request_id;
+	uint next_handle;
+	PendingRequest[] pending;
+	sz pending_count;
+	uint[16] late_ids;           // requests that timed out: a late answer is dropped quietly
+	sz late_count;
+	// events
+	Event[] events;
+	sz event_head;
+	sz event_count;
+}
+
+fn void Machine.init(&self, Allocator allocator, Config config, ChunkSecurity security = null)
+{
+	*self = {};
+	self.allocator = allocator;
+	self.config = config;
+	self.security = security;
+	self.state = State.IDLE;
+	self.next_request_id = 1;
+	self.next_handle = 1;
+	self.outbox.init(allocator, 1024);
+}
+
+fn void Machine.free(&self)
+{
+	self.reader.free();
+	self.outbox.free();
+	if (self.pending.ptr != null) alloc::free(self.allocator, self.pending.ptr);
+	if (self.events.ptr != null) alloc::free(self.allocator, self.events.ptr);
+	if (self.endpoint_url.ptr != null) alloc::free(self.allocator, self.endpoint_url.ptr);
+	self.pending = {};
+	self.events = {};
+	self.endpoint_url = {};
+	self.pending_count = 0;
+	self.event_count = 0;
+}
+
+// ---------- events ----------
+fn void Machine.push_event(&self, Event e)
+{
+	if (self.event_head > 0 && self.event_count == 0) self.event_head = 0;
+	if (self.event_head + self.event_count == self.events.len)
+	{
+		sz cap = self.events.len == 0 ? 8 : (self.event_count + 1) * 2;
+		Event[]? fresh = alloc::alloc_array_try(self.allocator, Event, cap);
+		if (catch fresh) return;                                   // out of memory: the event is dropped
+		for (sz i = 0; i < self.event_count; i++) fresh[i] = self.events[self.event_head + i];
+		if (self.events.ptr != null) alloc::free(self.allocator, self.events.ptr);
+		self.events = fresh;
+		self.event_head = 0;
+	}
+	self.events[self.event_head + self.event_count] = e;
+	self.event_count++;
+}
+
+fn bool Machine.poll_event(&self, Event* out)
+{
+	if (self.event_count == 0) return false;
+	*out = self.events[self.event_head];
+	self.event_head++;
+	self.event_count--;
+	return true;
+}
+
+fn void Machine.push_kind(&self, EventKind k) => self.push_event({ .kind = k });
+
+// ---------- ids ----------
+fn bool Machine.id_in_use(&self, uint id)
+{
+	for (sz i = 0; i < self.pending_count; i++)
+	{
+		if (self.pending[i].request_id == id) return true;
+	}
+	if (self.open_request_id == id && self.renew_pending) return true;
+	for (sz i = 0; i < self.renew_id_count; i++)
+	{
+		if (self.renew_ids[i] == id) return true;
+	}
+	return false;
+}
+
+// RequestIds are never reused while an earlier request with that id is outstanding.
+fn uint Machine.alloc_request_id(&self)
+{
+	while (true)
+	{
+		uint id = self.next_request_id;
+		self.next_request_id = id == uint::max ? 1 : id + 1;
+		if (id != 0 && !self.id_in_use(id)) return id;
+	}
+}
+
+fn uint Machine.alloc_handle(&self)
+{
+	uint h = self.next_handle;
+	self.next_handle = h == uint::max ? 1 : h + 1;
+	return h;
+}
+
+// ---------- header helpers ----------
+fn void? Machine.put_request_header(&self, Encoder* e, Now now, uint handle, uint timeout_hint)
+{
+	e.put_nodeid(self.auth_token)!;
+	e.put_datetime(now.utc)!;
+	e.put_u32(handle)!;
+	e.put_u32(0)!;                          // ReturnDiagnostics
+	e.put_string(null_string())!;           // AuditEntryId
+	e.put_u32(timeout_hint)!;
+	ExtensionObject none;
+	e.put_extension_object(none)!;          // AdditionalHeader
+}
+
+fn ResponseHeader? get_response_header(Decoder* d) @private
+{
+	ResponseHeader h;
+	h.timestamp = d.get_datetime()!;
+	h.request_handle = d.get_u32()!;
+	h.service_result = (StatusCode)d.get_u32()!;
+	(void)d.get_diagnostic_info()!;
+	int n = d.get_array_len(4)!;
+	for (int i = 0; i < n; i++) (void)d.get_string()!;
+	(void)d.get_extension_object()!;
+	return h;
+}
+
+// ---------- start ----------
+fn void? Machine.connect(&self, String endpoint_url, Now now)
+{
+	if (self.state != State.IDLE) return BAD_STATE~;
+	if (self.config.security_mode != MessageSecurityMode.NONE) return SECURITY_UNSUPPORTED~;
+	if (self.config.security_policy_uri.len != 0 && self.config.security_policy_uri != POLICY_NONE) return SECURITY_UNSUPPORTED~;
+	if (endpoint_url.len > MAX_ENDPOINT_URL) return URL_INVALID~;
+	if (self.config.receive_buffer_size < MIN_BUFFER_SIZE || self.config.send_buffer_size < MIN_BUFFER_SIZE) return BAD_LENGTH~;
+	char[] copy = alloc::alloc_array_try(self.allocator, char, endpoint_url.len + 1)!;
+	if (endpoint_url.len > 0) mem::copy(copy.ptr, endpoint_url.ptr, endpoint_url.len);
+	self.endpoint_url = (String)copy[:endpoint_url.len];
+	self.reader.init(self.allocator, self.config.limits, self.config.receive_buffer_size, self.security);
+	self.writer = chunk_writer(self.config.send_buffer_size, self.security);
+	// The announced MaxMessageSize / MaxChunkCount are 0 (no limit); the local ceilings in Config.limits are enforced anyway.
+	HelloMessage hello = { 0, self.config.receive_buffer_size, self.config.send_buffer_size, 0, 0, endpoint_url };
+	encode_hello(&self.outbox, &hello)!;
+	self.state = State.HEL_SENT;
+	self.handshake_active = true;
+	self.handshake_deadline = now.mono_ms + self.config.handshake_timeout_ms;
+}
+
+fn void? Machine.open_session(&self, Identity identity, Now now)
+{
+	return BAD_STATE~;
+}
+
+// ---------- OpenSecureChannel ----------
+fn void? Machine.queue_open(&self, bool renew, Now now)
+{
+	uint rid = self.alloc_request_id();
+	uint handle = self.alloc_handle();
+	ByteBuf b;
+	b.init(self.allocator, 128);
+	defer b.free();
+	Encoder e = encoder(&b);
+	e.put_nodeid(nodeid_num(0, ID_OPEN_SECURE_CHANNEL_REQUEST))!;
+	self.put_request_header(&e, now, handle, self.config.request_timeout_ms)!;
+	e.put_u32(0)!;                                   // ClientProtocolVersion
+	e.put_u32(renew ? 1 : 0)!;                       // RequestType: Issue / Renew
+	e.put_u32((uint)self.config.security_mode)!;
+	e.put_bytestring(null_bytes())!;                 // ClientNonce
+	e.put_u32(self.config.channel_lifetime_ms)!;
+	self.writer.write_open(&self.outbox, self.channel_id, rid, b.bytes())!;
+	if (renew)
+	{
+		if (self.renew_id_count == MAX_REMEMBERED_IDS)
+		{
+			for (sz i = 1; i < MAX_REMEMBERED_IDS; i++) self.renew_ids[i - 1] = self.renew_ids[i];
+			self.renew_id_count--;
+		}
+		self.renew_ids[self.renew_id_count] = rid;
+		self.renew_id_count++;
+	}
+	self.open_request_id = rid;
+	self.open_handle = handle;
+}
+
+fn uint effective_lifetime(uint revised) @private => revised == 0 ? DEFAULT_CHANNEL_LIFETIME_MS : (revised < MIN_LIFETIME_MS ? MIN_LIFETIME_MS : revised);
+
+fn void Machine.schedule_renewal(&self)
+{
+	ulong interval = (ulong)self.lifetime_ms * 3 / 4;
+	if (interval < MIN_RENEW_INTERVAL_MS) interval = MIN_RENEW_INTERVAL_MS;
+	self.next_renew_ms = self.token_issued_ms + interval;
+}
+
+fn void? Machine.on_ack(&self, Message* m, Now now)
+{
+	AckMessage ack = decode_ack(m.body)!;
+	if (ack.protocol_version > 0) return BAD_HANDSHAKE~;
+	if (ack.receive_buffer_size < MIN_BUFFER_SIZE || ack.send_buffer_size < MIN_BUFFER_SIZE) return BAD_HANDSHAKE~;
+	uint chunk = ack.receive_buffer_size < self.config.send_buffer_size ? ack.receive_buffer_size : self.config.send_buffer_size;
+	self.writer.max_chunk_size = chunk;
+	self.writer.max_message_size = ack.max_message_size;
+	self.writer.max_chunk_count = ack.max_chunk_count;
+	self.queue_open(false, now)!;
+	self.state = State.OPN_SENT;
+	self.handshake_deadline = now.mono_ms + self.config.handshake_timeout_ms;
+}
+
+// Response to an Issue or a Renew request.
+fn void? Machine.on_open_response(&self, Message* m, Now now, bool renew)
+{
+	String wanted = self.security == null ? POLICY_NONE : self.security.policy_uri();
+	if (m.policy_uri != wanted) return BAD_HANDSHAKE~;
+	if (renew)
+	{
+		bool known = false;
+		for (sz i = 0; i < self.renew_id_count; i++)
+		{
+			if (self.renew_ids[i] == m.request_id) known = true;
+		}
+		if (!known) return REQUEST_ID_UNKNOWN~;
+	}
+	else if (m.request_id != self.open_request_id)
+	{
+		return BAD_RESPONSE~;
+	}
+	uint channel;
+	uint token;
+	uint revised;
+	@pool()
+	{
+		Decoder d = decoder(m.body, tmem, self.config.limits);
+		NodeId tid = d.get_nodeid()!;
+		if (tid.kind != NodeIdKind.NUMERIC || tid.ns != 0) return BAD_RESPONSE~;
+		if (tid.num == ID_SERVICE_FAULT)
+		{
+			ResponseHeader fh = get_response_header(&d)!;
+			self.last_status = fh.service_result;
+			return SERVICE_FAULT~;
+		}
+		if (tid.num != ID_OPEN_SECURE_CHANNEL_RESPONSE) return BAD_RESPONSE~;
+		ResponseHeader h = get_response_header(&d)!;
+		if (h.request_handle != self.open_handle && !renew) return BAD_RESPONSE~;
+		if (!status_is_good(h.service_result))
+		{
+			self.last_status = h.service_result;
+			return SERVICE_FAULT~;
+		}
+		(void)d.get_u32()!;                          // ServerProtocolVersion
+		channel = d.get_u32()!;
+		token = d.get_u32()!;
+		(void)d.get_u64()!;                          // CreatedAt: the local clock decides the schedule
+		revised = d.get_u32()!;
+		(void)d.get_bytestring()!;                   // ServerNonce
+		if (d.remaining() != 0) return BAD_RESPONSE~;
+	};
+	if (channel == 0) return BAD_HANDSHAKE~;
+	if (m.channel_id != channel) return CHANNEL_ID_MISMATCH~;
+	if (renew)
+	{
+		if (channel != self.channel_id) return CHANNEL_ID_MISMATCH~;
+		self.old_token_id = self.token_id;
+		self.have_old_token = true;
+		self.old_token_expires_ms = self.token_issued_ms + effective_lifetime(self.lifetime_ms);
+		self.renew_pending = false;
+		self.renew_id_count = 0;
+	}
+	self.channel_id = channel;
+	self.token_id = token;
+	self.lifetime_ms = effective_lifetime(revised);
+	self.token_issued_ms = now.mono_ms;
+	self.schedule_renewal();
+	if (renew)
+	{
+		self.push_kind(EventKind.CHANNEL_RENEWED);
+	}
+	else
+	{
+		self.handshake_active = false;
+		self.state = State.CHANNEL_OPEN;
+		self.push_kind(EventKind.CHANNEL_OPEN);
+	}
+}
+
+// ---------- ingress ----------
+fn bool Machine.channel_up(&self)
+{
+	switch (self.state)
+	{
+		case CHANNEL_OPEN:
+		case SESSION_CREATING:
+		case SESSION_CREATED:
+		case ACTIVATING:
+		case ACTIVE:
+		case CLOSING: return true;
+		default: return false;
+	}
+}
+
+fn void? Machine.feed(&self, char[] data, Now now)
+{
+	if (self.state == State.IDLE || self.state == State.CLOSED || self.state == State.FAILED) return BAD_STATE~;
+	if (catch err = self.feed_frames(data, now))
+	{
+		self.fail(err, now);
+		return err~;
+	}
+}
+
+fn void? Machine.feed_frames(&self, char[] data, Now now)
+{
+	self.reader.feed(data)!;
+	Message m;
+	while (self.reader.next(&m)!)
+	{
+		if (self.state == State.CLOSING) continue;      // nothing is expected after our CLO
+		self.on_message(&m, now)!;
+	}
+}
+
+fn void? Machine.on_message(&self, Message* m, Now now)
+{
+	if (m.type == MsgType.ERR)
+	{
+		ErrorMessage err = decode_error(m.body, tmem)!;
+		self.last_status = err.error;
+		return PEER_ERROR~;
+	}
+	if (self.state == State.HEL_SENT)
+	{
+		if (m.type != MsgType.ACK) return BAD_HANDSHAKE~;
+		return self.on_ack(m, now);
+	}
+	if (self.state == State.OPN_SENT)
+	{
+		if (m.type != MsgType.OPN) return BAD_HANDSHAKE~;
+		return self.on_open_response(m, now, false);
+	}
+	switch (m.type)
+	{
+		case MSG:
+			if (m.aborted) return self.on_abort(m);
+			return self.on_service(m, now);
+		case OPN:
+			if (!self.renew_pending) return BAD_RESPONSE~;
+			return self.on_open_response(m, now, true);
+		case CLO: return CHANNEL_CLOSED~;
+		default: return BAD_HANDSHAKE~;
+	}
+}
+
+fn void? Machine.check_token(&self, Message* m, Now now)
+{
+	if (m.channel_id != self.channel_id) return CHANNEL_ID_MISMATCH~;
+	if (m.token_id == self.token_id)
+	{
+		self.have_old_token = false;            // the first chunk under the new token ends the old token's window
+		return;
+	}
+	if (self.have_old_token && m.token_id == self.old_token_id && now.mono_ms < self.old_token_expires_ms) return;
+	return TOKEN_UNKNOWN~;
+}
+
+fn sz Machine.find_pending(&self, uint request_id)
+{
+	for (sz i = 0; i < self.pending_count; i++)
+	{
+		if (self.pending[i].request_id == request_id) return i;
+	}
+	return self.pending_count;
+}
+
+fn void Machine.remove_pending(&self, sz idx)
+{
+	self.pending_count--;
+	if (idx != self.pending_count) self.pending[idx] = self.pending[self.pending_count];
+}
+
+fn void Machine.remember_late(&self, uint id)
+{
+	if (self.late_count == MAX_REMEMBERED_IDS)
+	{
+		for (sz i = 1; i < MAX_REMEMBERED_IDS; i++) self.late_ids[i - 1] = self.late_ids[i];
+		self.late_count--;
+	}
+	self.late_ids[self.late_count] = id;
+	self.late_count++;
+}
+
+fn bool Machine.is_late(&self, uint id)
+{
+	for (sz i = 0; i < self.late_count; i++)
+	{
+		if (self.late_ids[i] == id) return true;
+	}
+	return false;
+}
+
+// Completes the request at `idx` with a failure status (no service body).
+fn void Machine.complete_with_status(&self, sz idx, StatusCode status, bool local_timeout)
+{
+	PendingRequest p = self.pending[idx];
+	self.remove_pending(idx);
+	Event e = { .kind = EventKind.RESPONSE };
+	e.response.kind = ResponseKind.SERVICE_FAULT;
+	e.response.handle = p.handle;
+	e.response.header.service_result = status;
+	e.response.header.request_handle = p.handle;
+	e.response.local_timeout = local_timeout;
+	self.push_event(e);
+}
+
+fn void? Machine.on_abort(&self, Message* m)
+{
+	sz idx = self.find_pending(m.request_id);
+	if (idx == self.pending_count) return;           // an abort for a request we no longer wait for
+	self.last_status = m.abort_status;
+	self.complete_with_status(idx, m.abort_status, false);
+}
+
+fn void? Machine.on_service(&self, Message* m, Now now)
+{
+	self.check_token(m, now)!;
+	sz idx = self.find_pending(m.request_id);
+	if (idx == self.pending_count)
+	{
+		if (self.is_late(m.request_id)) return;      // answer to a request that already timed out
+		return REQUEST_ID_UNKNOWN~;
+	}
+	PendingRequest p = self.pending[idx];
+	Event e = { .kind = EventKind.RESPONSE };
+	@pool()
+	{
+		Decoder d = decoder(m.body, tmem, self.config.limits);
+		NodeId tid = d.get_nodeid()!;
+		ResponseHeader h = get_response_header(&d)!;
+		if (h.request_handle != p.handle) return BAD_RESPONSE~;
+		e.response.handle = p.handle;
+		e.response.header = h;
+		if (tid.kind == NodeIdKind.NUMERIC && tid.ns == 0 && tid.num == ID_SERVICE_FAULT)
+		{
+			if (d.remaining() != 0) return BAD_RESPONSE~;
+			e.response.kind = ResponseKind.SERVICE_FAULT;
+			self.last_status = h.service_result;
+		}
+		else
+		{
+			e.response.kind = ResponseKind.RAW;
+			sz rest = d.remaining();
+			char[] copy = alloc::alloc_array_try(p.allocator, char, rest == 0 ? 1 : rest)!;
+			if (rest > 0) mem::copy(copy.ptr, d.input.ptr + d.pos, rest);
+			e.response.raw = copy[:rest];
+		}
+	};
+	self.remove_pending(idx);
+	self.push_event(e);
+}
+
+// ---------- failure and close ----------
+fn void Machine.complete_all_pending(&self)
+{
+	while (self.pending_count > 0) self.complete_with_status(self.pending_count - 1, STATUS_BAD_CONNECTION_CLOSED, false);
+}
+
+fn void Machine.fail(&self, fault f, Now now)
+{
+	if (self.state == State.FAILED || self.state == State.CLOSED) return;
+	self.complete_all_pending();
+	self.state = State.FAILED;
+	self.failure = f;
+	self.handshake_active = false;
+	self.renew_pending = false;
+	self.push_kind(EventKind.FAILED);
+}
+
+// The adapter saw EOF: mid-frame -> TRANSPORT_TRUNCATED, between frames -> CLOSED; nothing happens after an orderly close.
+fn void Machine.transport_closed(&self, Now now)
+{
+	if (self.state == State.CLOSED || self.state == State.FAILED) return;
+	if (self.state == State.CLOSING)
+	{
+		self.finish_close();
+		return;
+	}
+	if (self.state == State.IDLE)
+	{
+		self.state = State.CLOSED;
+		return;
+	}
+	self.fail(self.reader.mid_frame() ? TRANSPORT_TRUNCATED : CLOSED, now);
+}
+
+fn void Machine.finish_close(&self)
+{
+	self.complete_all_pending();
+	self.state = State.CLOSED;
+	self.handshake_active = false;
+	self.renew_pending = false;
+	self.push_kind(EventKind.CLOSED);
+}
+
+// Queues the CloseSecureChannel chunk; the state becomes CLOSED after the output was consumed. A second call, or a call
+// on a failed or closed machine, does nothing.
+fn void? Machine.close(&self, Now now)
+{
+	switch (self.state)
+	{
+		case CLOSING:
+		case CLOSED:
+		case FAILED: return;
+		case IDLE:
+			self.state = State.CLOSED;
+			return;
+		case HEL_SENT:
+		case OPN_SENT:
+			self.finish_close();
+			return;
+		default:
+	}
+	uint rid = self.alloc_request_id();
+	uint handle = self.alloc_handle();
+	ByteBuf b;
+	b.init(self.allocator, 64);
+	defer b.free();
+	Encoder e = encoder(&b);
+	e.put_nodeid(nodeid_num(0, ID_CLOSE_SECURE_CHANNEL_REQUEST))!;
+	self.put_request_header(&e, now, handle, 0)!;
+	self.writer.write_message(&self.outbox, MsgType.CLO, self.channel_id, self.token_id, rid, b.bytes())!;
+	self.state = State.CLOSING;
+	self.renew_pending = false;
+	if (self.out_pos >= self.outbox.len) self.finish_close();
+}
+
+// ---------- output ----------
+// Bytes to send: a view into the outbox; call consume_output(n) after the transport accepted n bytes.
+fn char[] Machine.pending_output(&self) => self.outbox.bytes()[self.out_pos..];
+
+fn void Machine.consume_output(&self, sz n)
+{
+	sz left = self.outbox.len - self.out_pos;
+	self.out_pos += n > left ? left : n;
+	if (self.out_pos >= self.outbox.len)
+	{
+		self.outbox.clear();
+		self.out_pos = 0;
+		if (self.state == State.CLOSING) self.finish_close();
+	}
+}
+
+// ---------- time ----------
+// Next deadline in mono_ms: handshake, channel renewal (75% of the lifetime, retries), request timeouts.
+// Returns false when nothing is scheduled (not an error).
+fn bool Machine.next_deadline(&self, ulong* out)
+{
+	bool have = false;
+	ulong best = 0;
+	if (self.handshake_active) { best = self.handshake_deadline; have = true; }
+	if (self.channel_up() && self.state != State.CLOSING)
+	{
+		ulong t = self.renew_pending ? self.renew_retry_ms : self.next_renew_ms;
+		if (!have || t < best) { best = t; have = true; }
+		if (self.renew_pending)
+		{
+			ulong expiry = self.token_issued_ms + self.lifetime_ms;
+			if (expiry < best) best = expiry;
+		}
+	}
+	for (sz i = 0; i < self.pending_count; i++)
+	{
+		if (!have || self.pending[i].deadline < best) { best = self.pending[i].deadline; have = true; }
+	}
+	*out = best;
+	return have;
+}
+
+fn void? Machine.handle_timeout(&self, Now now)
+{
+	if (self.state == State.IDLE || self.state == State.CLOSED || self.state == State.FAILED) return;
+	if (catch err = self.run_timers(now))
+	{
+		self.fail(err, now);
+		return err~;
+	}
+}
+
+fn void? Machine.run_timers(&self, Now now)
+{
+	if (self.handshake_active && now.mono_ms >= self.handshake_deadline) return TIMEOUT~;
+	if (self.channel_up() && self.state != State.CLOSING)
+	{
+		if (self.renew_pending)
+		{
+			if (now.mono_ms >= self.token_issued_ms + self.lifetime_ms) return TIMEOUT~;    // the old token ran out
+			if (now.mono_ms >= self.renew_retry_ms)
+			{
+				self.push_kind(EventKind.CHANNEL_RENEW_FAILED);
+				self.queue_open(true, now)!;
+				self.renew_retry_ms = now.mono_ms + self.config.request_timeout_ms;
+			}
+		}
+		else if (now.mono_ms >= self.next_renew_ms)
+		{
+			if (now.mono_ms >= self.token_issued_ms + self.lifetime_ms) return TIMEOUT~;
+			self.queue_open(true, now)!;
+			self.renew_pending = true;
+			self.renew_retry_ms = now.mono_ms + self.config.request_timeout_ms;
+		}
+	}
+	sz i = 0;
+	while (i < self.pending_count)
+	{
+		if (self.pending[i].deadline <= now.mono_ms)
+		{
+			self.remember_late(self.pending[i].request_id);
+			self.complete_with_status(i, STATUS_BAD_TIMEOUT, true);
+		}
+		else
+		{
+			i++;
+		}
+	}
+}
+
+// ---------- requests ----------
+// Queues one service request whose body (everything after the RequestHeader) the caller encoded. Returns the handle.
+fn uint? Machine.send_raw(&self, Allocator alloc, Now now, NodeId type_id, char[] body)
+{
+	if (self.state != State.CHANNEL_OPEN && self.state != State.ACTIVE) return BAD_STATE~;
+	if (self.pending_count >= self.config.limits.max_outstanding_requests) return TOO_MANY_PENDING~;
+	if (self.pending_count == self.pending.len)
+	{
+		sz cap = self.pending.len == 0 ? 8 : self.pending.len * 2;
+		PendingRequest[] fresh = alloc::alloc_array_try(self.allocator, PendingRequest, cap)!;
+		for (sz i = 0; i < self.pending_count; i++) fresh[i] = self.pending[i];
+		if (self.pending.ptr != null) alloc::free(self.allocator, self.pending.ptr);
+		self.pending = fresh;
+	}
+	uint rid = self.alloc_request_id();
+	uint handle = self.alloc_handle();
+	ByteBuf b;
+	b.init(self.allocator, 128 + body.len);
+	defer b.free();
+	Encoder e = encoder(&b);
+	e.put_nodeid(type_id)!;
+	self.put_request_header(&e, now, handle, self.config.request_timeout_ms)!;
+	e.put_raw(body)!;
+	self.writer.write_message(&self.outbox, MsgType.MSG, self.channel_id, self.token_id, rid, b.bytes())!;
+	self.pending[self.pending_count] = { rid, handle, now.mono_ms + self.config.request_timeout_ms, alloc };
+	self.pending_count++;
+	return handle;
+}
