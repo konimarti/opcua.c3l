@@ -710,7 +710,7 @@ fn void requests_unknown_id_never_reaches_another() @test
 	uint a = m.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
 	uint b = m.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
 	assert(a != b && m.pending_count == 2);
-	assert(@fails(m.feed(s.msg(77, a, 1), at(2)), REQUEST_ID_UNKNOWN));
+	assert(@fails(m.feed(s.msg(77, a, 1, "01 00 FF FF"), at(2)), REQUEST_ID_UNKNOWN), "an unknown id with an unknown type is a violation");
 	Event e;
 	while (m.poll_event(&e))
 	{

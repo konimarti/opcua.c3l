@@ -55,3 +55,62 @@ fn char[] FakeServer.service_fault(&self, uint request_id, uint handle, uint tok
 {
 	return self.msg(request_id, handle, token, ID_SERVICE_FAULT_HEX, "", result);
 }
+
+// ---------- session and service templates ----------
+const String ID_CREATE_SESSION_RESPONSE = "01 00 D0 01";
+const String ID_ACTIVATE_SESSION_RESPONSE = "01 00 D6 01";
+const String ID_CLOSE_SESSION_RESPONSE = "01 00 DC 01";
+const String ID_WRITE_RESPONSE = "01 00 A4 02";
+const String ID_CALL_RESPONSE = "01 00 CB 02";
+const String ID_PUBLISH_RESPONSE = "01 00 3D 03";
+const String ID_READ_REQUEST = "01 00 77 02";
+const String NULL4 = "FF FF FF FF";
+const String DOUBLE_60000 = "00 00 00 00 00 4C ED 40";
+const String DOUBLE_90000 = "00 00 00 00 00 F9 F5 40";
+const String DOUBLE_NAN = "00 00 00 00 00 00 F8 7F";
+const String DOUBLE_ZERO = "00 00 00 00 00 00 00 00";
+const String DOUBLE_MINUS = "00 00 00 00 00 00 14 C0";
+const String DOUBLE_INF = "00 00 00 00 00 00 F0 7F";
+const String READ_PAYLOAD = "01 00 00 00 01 06 2A 00 00 00 00 00 00 00";                   // one DataValue (Int32 42), no diagnostics
+const String WRITE_PAYLOAD = "01 00 00 00 00 00 00 00 00 00 00 00";
+const String CALL_PAYLOAD = "01 00 00 00 00 00 00 00 FF FF FF FF FF FF FF FF 00 00 00 00 00 00 00 00";
+const String ACTIVATE_PAYLOAD = "FF FF FF FF FF FF FF FF FF FF FF FF";
+
+// A String as it appears on the wire: length and ASCII bytes, as hex.
+fn String str_hex(String s)
+{
+	DString d = dstring::temp();
+	d.appendf("%s", le32((uint)s.len));
+	foreach (c : s) d.appendf(" %02X", c);
+	return d.str_view();
+}
+
+// RequestHeader as hex: `auth` is the hex of the AuthenticationToken NodeId.
+fn String request_header_hex(String auth, uint handle, uint timeout_hint)
+{
+	return string::tformat("%s 00 00 00 00 00 00 00 00 %s 00 00 00 00 FF FF FF FF %s 00 00 00", auth, le32(handle), le32(timeout_hint));
+}
+
+// One EndpointDescription (mode None, policy None) with an anonymous and a user name policy; `user_policy_uri` is the hex of
+// the user name policy's SecurityPolicyUri string.
+fn String endpoint_hex(String user_policy_uri = NULL4, String policy_uri = NONE_URI_FULL, uint mode = 1, bool offer_user = true)
+{
+	String users = offer_user ? string::tformat("02 00 00 00 04 00 00 00 61 6E 6F 6E 00 00 00 00 %s %s %s 04 00 00 00 75 73 65 72 01 00 00 00 %s %s %s", NULL4, NULL4, NULL4, NULL4, NULL4, user_policy_uri) : string::tformat("01 00 00 00 04 00 00 00 61 6E 6F 6E 00 00 00 00 %s %s %s", NULL4, NULL4, NULL4);
+	return string::tformat("01 00 00 00 75  01 00 00 00 73 %s 00  00 00 00 00 %s %s %s  %s  %s  %s  %s  %s  00", NULL4, NULL4, NULL4, NULL4, NULL4, le32(mode), policy_uri, users, NULL4);
+}
+
+fn String session_payload(String timeout = DOUBLE_60000, String endpoints = "", String session_id = "01 01 64 00", uint max_request = 0)
+{
+	String eps = endpoints.len == 0 ? string::tformat("01 00 00 00 %s", endpoint_hex()) : endpoints;
+	return string::tformat("%s 01 01 65 00 %s %s %s %s %s %s %s %s", session_id, timeout, NULL4, NULL4, eps, NULL4, NULL4, NULL4, le32(max_request));
+}
+
+fn char[] FakeServer.create_session_response(&self, uint request_id, uint handle, uint token, String payload = "")
+{
+	return self.msg(request_id, handle, token, ID_CREATE_SESSION_RESPONSE, payload.len == 0 ? session_payload() : payload);
+}
+
+fn char[] FakeServer.activate_response(&self, uint request_id, uint handle, uint token, uint result = 0)
+{
+	return self.msg(request_id, handle, token, ID_ACTIVATE_SESSION_RESPONSE, ACTIVATE_PAYLOAD, result);
+}
