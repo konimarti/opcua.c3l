@@ -1,6 +1,8 @@
 module opcua;
+import std::core::env;
 
-fn void version_comes_from_project_json() @test
+// In the library's own test build the library is the top-level project, so env::PROJECT_VERSION is the version of project.json.
+fn void version_matches_project_json() @test
 {
-	assert(version() == "0.1.0");
+	assert(opcua::VERSION == env::PROJECT_VERSION);
 }

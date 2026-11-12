@@ -17,7 +17,7 @@ C3 cannot make a *method* private, so the internal methods of `Machine`, `ChunkR
 | Transport | `Transport`, `TcpTransport`, `tcp_connect`, `EndpointUrl`, `parse_endpoint_url` |
 | Security hook | `ChunkSecurity`, `SecurityNone`, `POLICY_*` |
 | Diagnostics | `trace_chunk`, `FrameTracer` |
-| Version | `version()` (reads `env::PROJECT_VERSION`, i.e. `project.json`) |
+| Version | `VERSION` (`opcua::VERSION`, equal to `project.json`; see Versioning in the README) |
 
 ## Extras (public, documented, not part of the contract)
 

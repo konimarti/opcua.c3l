@@ -1,5 +1,7 @@
 module opcua;
 
+const String VERSION = "0.1.0";            // kept equal to "version" in project.json by tools/bump_version.c3 and a test
+
 // Built-in types of OPC 10000-6 5.1.2 / 5.2.2 that the codec handles so far.
 
 typedef StatusCode = uint;                 // 10000-4 7.39

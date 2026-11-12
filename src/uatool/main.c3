@@ -355,6 +355,11 @@ fn int cmd_browse(Options* o)
 
 fn int main(String[] args)
 {
+	if (args.len == 2 && args[1] == "--version")
+	{
+		io::printn(VERSION);
+		return 0;
+	}
 	Options o;
 	if (!parse_args(args, &o)) return usage();
 	if (o.command == "endpoints") return cmd_endpoints(&o);
