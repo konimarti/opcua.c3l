@@ -59,7 +59,11 @@ fn bool parse_args(String[] argv, Options* o)
 			if (i + 1 >= argv.len) return false;
 			String v = argv[++i];
 			if (a == "--user") o.user = v;
-			if (a == "--password") o.password = v;
+			if (a == "--password")
+			{
+				io::eprintn("warning: --password is visible in the process list and the shell history; prefer --password-env NAME");
+				o.password = v;
+			}
 			if (a == "--password-env")
 			{
 				String? pw = env::tget_var(v);
