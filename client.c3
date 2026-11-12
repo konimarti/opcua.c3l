@@ -24,9 +24,9 @@ struct Client
 	bool closed;
 }
 
-fn Duration default_io_timeout() => time::sec(10);
+fn Duration default_io_timeout() @private => time::sec(10);
 
-fn bool all_zero(char[] b)
+fn bool all_zero(char[] b) @private
 {
 	foreach (x : b)
 	{
@@ -158,7 +158,7 @@ fn void? Client.flush(&self)
 	}
 }
 
-fn Duration ms_duration(ulong ms) => time::ms((long)ms);
+fn Duration ms_duration(ulong ms) @private => time::ms((long)ms);
 
 // One step: send what is queued, wait for bytes (at most `wait`, and not beyond the next machine deadline), feed them, then
 // run the timers. A read that times out is not an error here: the deadlines of the machine decide when something failed.
@@ -344,10 +344,16 @@ fn BrowseResult? Client.browse(&self, Allocator alloc, NodeId node, BrowseDirect
 	char[] point = result.continuation_point;
 	StatusCode status = result.status_code;
 	uint pages = 0;
-	while (point.len > 0 && !status_is_bad(status))
+	while (true)
 	{
+		if (merged.len() > self.machine.config.limits.max_browse_references)
+		{
+			if (point.len > 0) self.release_point(alloc, point);
+			return TOO_MANY_PAGES~;                          // more references than the limit allows, however they arrived
+		}
+		if (point.len == 0 || status_is_bad(status)) break;
 		pages++;
-		if (pages > self.machine.config.limits.max_browse_pages || merged.len() > self.machine.config.limits.max_browse_references)
+		if (pages > self.machine.config.limits.max_browse_pages)
 		{
 			self.release_point(alloc, point);                 // a server that never stops must not make the client grow without bound
 			return TOO_MANY_PAGES~;
