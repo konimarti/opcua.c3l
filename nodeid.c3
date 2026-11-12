@@ -90,6 +90,7 @@ fn ulong? parse_hex(String s, sz at, sz digits) @local
 // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 fn Guid? parse_guid(String s) @local
 {
+	if (s.len == 38 && s[0] == '{' && s[37] == '}') s = s[1:36];
 	if (s.len != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') return BAD_NODEID~;
 	Guid g;
 	g.d1 = (uint)parse_hex(s, 0, 8)!;
@@ -145,7 +146,7 @@ fn NodeId? parse_nodeid(String text, Allocator allocator)
 
 fn String nodeid_to_string(NodeId id, Allocator allocator)
 {
-	String prefix = id.ns == 0 ? "" : string::format(allocator, "ns=%d;", id.ns);
+	String prefix = id.ns == 0 ? "" : string::format(tmem, "ns=%d;", id.ns);
 	switch (id.kind)
 	{
 		case NUMERIC: return string::format(allocator, "%si=%d", prefix, id.num);
@@ -154,6 +155,6 @@ fn String nodeid_to_string(NodeId id, Allocator allocator)
 			Guid g = id.guid;
 			return string::format(allocator, "%sg=%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", prefix, g.d1, g.d2, g.d3,
 				g.d4[0], g.d4[1], g.d4[2], g.d4[3], g.d4[4], g.d4[5], g.d4[6], g.d4[7]);
-		case OPAQUE: return string::format(allocator, "%sb=%s", prefix, base64::encode(allocator, id.bytes));
+		case OPAQUE: return string::format(allocator, "%sb=%s", prefix, base64::encode(tmem, id.bytes));
 	}
 }
