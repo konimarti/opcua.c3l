@@ -176,3 +176,33 @@ macro bool @fails(#expr, fault expected)
 	if (catch err = #expr) return err == expected;
 	return false;
 }
+
+fn char[] enc_variant(Variant v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_variant(v)!!; return b.bytes(); }
+fn char[] enc_dv(DataValue v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_data_value(v)!!; return b.bytes(); }
+fn char[] enc_ltext(LocalizedText v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_localized_text(v)!!; return b.bytes(); }
+fn char[] enc_qname(QualifiedName v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_qualified_name(v)!!; return b.bytes(); }
+fn char[] enc_xnode(ExpandedNodeId v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_expanded_nodeid(v)!!; return b.bytes(); }
+fn char[] enc_ext(ExtensionObject v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_extension_object(v)!!; return b.bytes(); }
+fn char[] enc_diag(DiagnosticInfo v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_diagnostic_info(v)!!; return b.bytes(); }
+fn char[] enc_datetime(UaDateTime v) { ByteBuf b; b.init(tmem); Encoder e = encoder(&b); e.put_datetime(v)!!; return b.bytes(); }
+
+// "AA BB CC" text of a byte slice (for the vector helpers that take hex)
+fn String tohex(char[] bytes)
+{
+	DString s = dstring::temp();
+	foreach (i, c : bytes)
+	{
+		if (i > 0) s.append_char(' ');
+		s.appendf("%02X", c);
+	}
+	return s.str_view();
+}
+
+// slice of two values
+macro pair($Type, a, b)
+{
+	$Type[] s = alloc::alloc_array(tmem, $Type, 2);
+	s[0] = ($Type)a;
+	s[1] = ($Type)b;
+	return s;
+}
