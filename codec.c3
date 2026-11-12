@@ -314,10 +314,10 @@ fn Guid? Decoder.get_guid(&self)
 // ExpandedNodeId and are BAD_NODEID here.
 fn NodeId? Decoder.get_nodeid(&self)
 {
+	if (self.remaining() == 0) return TRUNCATED~;
+	if ((self.input[self.pos] & 0xC0) != 0) return BAD_NODEID~;      // before anything is decoded or allocated
 	char flags;
-	NodeId id = self.get_nodeid_flagged(&flags)!;
-	if (flags != 0) return BAD_NODEID~;
-	return id;
+	return self.get_nodeid_flagged(&flags);
 }
 
 // Returns the ExpandedNodeId flag bits (0x80, 0x40) of the encoding byte in *flags.

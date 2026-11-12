@@ -140,14 +140,28 @@ fn void? Encoder.put_scalar(&self, BuiltIn t, Scalar* s)
 		case DATETIME: self.put_datetime(s.dt)!;
 		case GUID: self.put_guid(s.guid)!;
 		case BYTESTRING: self.put_bytestring(s.bytes)!;
-		case NODEID: self.put_nodeid(*s.node_id)!;
-		case EXPANDEDNODEID: self.put_expanded_nodeid(*s.xnode_id)!;
+		case NODEID:
+			if (s.node_id == null) return BAD_ENCODING~;
+			self.put_nodeid(*s.node_id)!;
+		case EXPANDEDNODEID:
+			if (s.xnode_id == null) return BAD_ENCODING~;
+			self.put_expanded_nodeid(*s.xnode_id)!;
 		case STATUSCODE: self.put_u32((uint)s.sc)!;
-		case QUALIFIEDNAME: self.put_qualified_name(*s.qname)!;
-		case LOCALIZEDTEXT: self.put_localized_text(*s.ltext)!;
-		case EXTENSIONOBJECT: self.put_extension_object(*s.ext)!;
-		case DATAVALUE: self.put_data_value(*s.dv)!;
-		case DIAGNOSTICINFO: self.put_diagnostic_info(*s.diag)!;
+		case QUALIFIEDNAME:
+			if (s.qname == null) return BAD_ENCODING~;
+			self.put_qualified_name(*s.qname)!;
+		case LOCALIZEDTEXT:
+			if (s.ltext == null) return BAD_ENCODING~;
+			self.put_localized_text(*s.ltext)!;
+		case EXTENSIONOBJECT:
+			if (s.ext == null) return BAD_ENCODING~;
+			self.put_extension_object(*s.ext)!;
+		case DATAVALUE:
+			if (s.dv == null) return BAD_ENCODING~;
+			self.put_data_value(*s.dv)!;
+		case DIAGNOSTICINFO:
+			if (s.diag == null) return BAD_ENCODING~;
+			self.put_diagnostic_info(*s.diag)!;
 		default: return BAD_ENCODING~;
 	}
 }
@@ -198,6 +212,21 @@ fn void? Encoder.put_variant(&self, Variant v)
 	}
 	if (v.dims.len > 0 && !v.is_array) return BAD_ENCODING~;
 	if (v.type == VARIANT && !v.is_array) return BAD_ENCODING~;       // a scalar Variant inside a Variant is not allowed
+	sz n = 0;
+	if (v.is_array)
+	{
+		n = array_data_len(v.type, &v.array);
+		if (v.dims.len > 0)
+		{
+			ulong prod = 1;
+			foreach (d : v.dims)
+			{
+				prod *= (ulong)d;
+				if (prod > (ulong)int::max) return BAD_LENGTH~;
+			}
+			if (prod != (ulong)n) return BAD_LENGTH~;
+		}
+	}
 	char mask = tid;
 	if (v.is_array) mask |= 0x80;
 	if (v.dims.len > 0) mask |= 0x40;
@@ -207,18 +236,10 @@ fn void? Encoder.put_variant(&self, Variant v)
 		self.put_scalar(v.type, &v.scalar)!;
 		return;
 	}
-	sz n = array_data_len(v.type, &v.array);
 	self.put_array_len(n, array_data_is_null(v.type, &v.array))!;
 	self.put_array_data(v.type, &v.array)!;
 	if (v.dims.len > 0)
 	{
-		ulong prod = 1;
-		foreach (d : v.dims)
-		{
-			prod *= (ulong)d;
-			if (prod > (ulong)int::max) return BAD_LENGTH~;
-		}
-		if (prod != (ulong)n) return BAD_LENGTH~;
 		self.put_array_len(v.dims.len)!;
 		foreach (d : v.dims) self.put_u32(d)!;
 	}
@@ -252,26 +273,33 @@ fn void? Decoder.get_scalar(&self, BuiltIn t, Scalar* s)
 		case BYTESTRING: s.bytes = self.get_bytestring()!;
 		case STATUSCODE: s.sc = (StatusCode)self.get_u32()!;
 		case NODEID:
+			NodeId val = self.get_nodeid()!;
 			s.node_id = alloc::new_try(self.allocator, NodeId)!;
-			*s.node_id = self.get_nodeid()!;
+			*s.node_id = val;
 		case EXPANDEDNODEID:
+			ExpandedNodeId val = self.get_expanded_nodeid()!;
 			s.xnode_id = alloc::new_try(self.allocator, ExpandedNodeId)!;
-			*s.xnode_id = self.get_expanded_nodeid()!;
+			*s.xnode_id = val;
 		case QUALIFIEDNAME:
+			QualifiedName val = self.get_qualified_name()!;
 			s.qname = alloc::new_try(self.allocator, QualifiedName)!;
-			*s.qname = self.get_qualified_name()!;
+			*s.qname = val;
 		case LOCALIZEDTEXT:
+			LocalizedText val = self.get_localized_text()!;
 			s.ltext = alloc::new_try(self.allocator, LocalizedText)!;
-			*s.ltext = self.get_localized_text()!;
+			*s.ltext = val;
 		case EXTENSIONOBJECT:
+			ExtensionObject val = self.get_extension_object()!;
 			s.ext = alloc::new_try(self.allocator, ExtensionObject)!;
-			*s.ext = self.get_extension_object()!;
+			*s.ext = val;
 		case DATAVALUE:
+			DataValue val = self.get_data_value()!;
 			s.dv = alloc::new_try(self.allocator, DataValue)!;
-			*s.dv = self.get_data_value()!;
+			*s.dv = val;
 		case DIAGNOSTICINFO:
+			DiagnosticInfo val = self.get_diagnostic_info()!;
 			s.diag = alloc::new_try(self.allocator, DiagnosticInfo)!;
-			*s.diag = self.get_diagnostic_info()!;
+			*s.diag = val;
 		default: return BAD_ENCODING~;
 	}
 }

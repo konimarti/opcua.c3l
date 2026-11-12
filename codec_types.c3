@@ -24,8 +24,8 @@ const long UA_UNIX_EPOCH_MS = 11644473600000;             // milliseconds betwee
 fn UaDateTime datetime_from_unix_ms(long unix_ms)
 {
 	if (unix_ms < -UA_UNIX_EPOCH_MS) return (UaDateTime)0;
-	long ms = unix_ms + UA_UNIX_EPOCH_MS;                   // >= 0, cannot overflow for unix_ms <= long::max - epoch
 	if (unix_ms > long::max - UA_UNIX_EPOCH_MS) return (UaDateTime)long::max;
+	long ms = unix_ms + UA_UNIX_EPOCH_MS;                   // >= 0 and cannot overflow here
 	if (ms > long::max / UA_TICKS_PER_MS) return (UaDateTime)long::max;
 	return (UaDateTime)(ms * UA_TICKS_PER_MS);
 }
@@ -165,8 +165,9 @@ fn DiagnosticInfo? Decoder.get_diagnostic_info(&self)
 	if (mask & 0x20) d.inner_status = (StatusCode)self.get_u32()!;
 	if (mask & 0x40)
 	{
+		DiagnosticInfo inner = self.get_diagnostic_info()!;
 		d.inner = alloc::new_try(self.allocator, DiagnosticInfo)!;
-		*d.inner = self.get_diagnostic_info()!;
+		*d.inner = inner;
 	}
 	return d;
 }
