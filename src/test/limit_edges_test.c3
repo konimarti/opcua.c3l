@@ -2,7 +2,7 @@ module opcua;
 
 // Zero limits mean the defaults; the frame tracer skips an oversized frame instead of mis-parsing its rest.
 
-fn void m8fix_zero_browse_limits_mean_the_defaults() @test
+fn void edge_zero_browse_limits_mean_the_defaults() @test
 {
 	ScriptTransport st;
 	st.start();
@@ -19,7 +19,7 @@ fn void m8fix_zero_browse_limits_mean_the_defaults() @test
 	assert(c.browse(&arena, nodeid_num(0, 85))!!.references.len == 2, "an ordinary two-page browse works with hand-built limits");
 }
 
-fn void m8fix_outbound_tracer_uses_the_send_buffer() @test
+fn void edge_outbound_tracer_uses_the_send_buffer() @test
 {
 	ScriptTransport st;
 	st.start();
@@ -32,7 +32,7 @@ fn void m8fix_outbound_tracer_uses_the_send_buffer() @test
 	assert(c.trace_out.max_frame == 65536 && c.trace_in.max_frame == 8192);
 }
 
-fn void m8fix_tracer_skips_an_oversized_frame() @test
+fn void edge_tracer_skips_an_oversized_frame() @test
 {
 	FrameTracer t;
 	t.init(mem, 100);
