@@ -83,3 +83,24 @@ fn void hardening_user_policy_naming_none_is_clear_text() @test
 	open_channel(&n, &t);
 	assert(@fails(n.open_session(identity_username("alice", "pw"), at(0)), SECURITY_UNSUPPORTED), "still refused without the opt-in");
 }
+
+// Some servers announce a MaxRequestMessageSize they do not enforce (asyncua says 65536 and takes larger requests): the size
+// check against it can be switched off; the check against the peer's MaxMessageSize from the ACK stays.
+fn void hardening_server_request_limit_can_be_ignored() @test
+{
+	Config c = session_config();
+	c.ignore_server_request_limit = true;
+	Rig r;
+	r.start(c, session_payload(DOUBLE_60000, "", "01 01 64 00", 100));
+	defer r.stop();
+	assert(r.m.session_max_request == 100);
+	assert(r.m.request_size_limit() == 0, "the announced limit is not applied");
+	ReadValueId[1] node = { { .node_id = nodeid_num(0, 2258), .attribute_id = 13, .index_range = "0:1,0:1,0:1,0:1,0:1,0:1,0:1,0:1,0:1,0:1,0:1,0:1" } };
+	(void)r.m.send_read(&r.arena, at(1), &node, 0.0)!!;
+	r.m.writer.max_message_size = 100;
+	assert(r.m.request_size_limit() == 100, "the ACK limit still applies");
+	Rig strict;
+	strict.start(session_config(), session_payload(DOUBLE_60000, "", "01 01 64 00", 100));
+	defer strict.stop();
+	assert(strict.m.request_size_limit() == 100, "by default the announced limit applies");
+}
