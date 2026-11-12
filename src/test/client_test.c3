@@ -2,6 +2,8 @@ module opcua;
 import std::time;
 import std::time::clock;
 import std::thread;
+import std::net;
+import std::net::tcp;
 
 // The blocking Client over a scripted transport: the whole stack without a socket and without a peer.
 
@@ -201,4 +203,74 @@ fn void client_overdue_renewal_goes_out_first() @test
 	assert(v.has_value);
 	assert(st.renewals_seen >= 1, "the renewal was queued before the request");
 	c.close()!!;
+}
+
+// ---------- the client over a real socket: the scripted server runs in a thread behind a loopback listener ----------
+struct LoopServer
+{
+	TcpServerSocket listener;
+	ScriptTransport script;
+	int rounds;
+}
+
+fn int loop_server_main(void* arg)
+{
+	@pool_init(mem, 1 << 16)
+	{
+		loop_server_run((LoopServer*)arg);
+	};
+	return 0;
+}
+
+fn void loop_server_run(LoopServer* ls)
+{
+	TcpSocket conn = tcp::accept(&ls.listener)!!;
+	defer (void)conn.close();
+	char[4096] buf;
+	Clock start = clock::now();
+	while ((long)start.to_now() / 1_000_000 < 15000)
+	{
+		Poll[1] p = { { conn.sock, PollSubscribe.READ, {} } };
+		ulong? ready = net::poll_ms(&p, 100);
+		if (catch err = ready) break;
+		if (ready == 0) continue;
+		sz? n = conn.read(&buf);
+		if (catch err = n) break;
+		if (n == 0) break;
+		ls.rounds++;
+		if (catch err = ls.script.write(buf[:n], time::sec(1))) break;
+		if (ls.script.inbox.len > 0)
+		{
+			if (catch err = conn.write(ls.script.inbox.bytes())) break;
+			ls.script.inbox.clear();
+		}
+	}
+}
+
+fn void client_over_a_real_socket() @test
+{
+	LoopServer ls;
+	ls.script.start();
+	defer ls.script.stop();
+	ls.listener = tcp::listen("127.0.0.1", 0, 4, REUSEADDR)!!;
+	defer (void)ls.listener.close();
+	ushort port = ls.listener.local_port()!!;
+	Thread th;
+	th.create(&loop_server_main, &ls)!!;
+	TcpTransport tcp = tcp_connect("127.0.0.1", port)!!;
+	Transport t = &tcp;
+	String url = string::tformat("opc.tcp://127.0.0.1:%d", port);
+	Client* c = client_connect(mem, t, url, client_config())!!;
+	DynamicArenaAllocator arena;
+	arena.init(mem, 4096);
+	defer arena.free();
+	c.open_session()!!;
+	DataValue v = c.read(&arena, nodeid_num(0, 2259))!!;
+	assert(v.has_value && v.value.scalar.i32 == 42);
+	BrowseResult b = c.browse(&arena, nodeid_num(0, 85))!!;
+	assert(b.references.len == 2);
+	c.close()!!;
+	c.free();
+	th.join()!!;
+	assert(ls.script.close_seen && ls.rounds >= 4);
 }
