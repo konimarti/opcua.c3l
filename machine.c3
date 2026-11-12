@@ -231,15 +231,30 @@ fn bool Machine.poll_event(&self, Event* out)
 	if (self.event_count == 0)
 	{
 		if (!self.events_lost) return false;
-		// An event could not be queued: the caller must not wait for it forever.
-		self.events_lost = false;
-		if (self.failed_queued) return false;
-		self.failed_queued = true;
-		if (self.state != State.FAILED)
+		// An event could not be queued: the caller must not wait for it forever. The machine fails, every request that is
+		// still pending is answered straight from here (no queue space needed), then FAILED follows.
+		if (self.state != State.FAILED && self.state != State.CLOSED)
 		{
 			self.state = State.FAILED;
 			self.failure = BUFFER_FULL;
+			self.handshake_active = false;
+			self.renew_pending = false;
 		}
+		if (self.pending_count > 0)
+		{
+			PendingRequest p = self.pending[self.pending_count - 1];
+			self.pending_count--;
+			Event e = { .kind = EventKind.RESPONSE };
+			e.response.kind = ResponseKind.SERVICE_FAULT;
+			e.response.handle = p.handle;
+			e.response.header.service_result = STATUS_BAD_CONNECTION_CLOSED;
+			e.response.header.request_handle = p.handle;
+			*out = e;
+			return true;
+		}
+		self.events_lost = false;
+		if (self.failed_queued) return false;
+		self.failed_queued = true;
 		*out = { .kind = EventKind.FAILED };
 		return true;
 	}
@@ -761,6 +776,7 @@ fn void Machine.consume_output(&self, sz n)
 // Returns false when nothing is scheduled (not an error).
 fn bool Machine.next_deadline(&self, ulong* out)
 {
+	if (self.state == State.IDLE || self.state == State.CLOSED || self.state == State.FAILED) return false;
 	bool have = false;
 	ulong best = 0;
 	if (self.handshake_active) { best = self.handshake_deadline; have = true; }

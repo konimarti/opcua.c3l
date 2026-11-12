@@ -133,3 +133,59 @@ fn void robust_short_error_body() @test
 	assert(@fails(m.feed(unhex("45 52 52 46 0A 00 00 00 01 02"), at(0)), PEER_ERROR));
 	assert(m.state == State.FAILED && m.failure == PEER_ERROR);
 }
+
+// A lost event must not leave requests behind: every pending request still gets its answer before FAILED, and a failed
+// machine schedules nothing.
+fn void robust_lost_event_completes_the_rest() @test
+{
+	Machine m;
+	m.init(mem, test_config());
+	defer m.free();
+	FakeServer s = fake_server();
+	open_channel(&m, &s);
+	for (int i = 0; i < 9; i++) (void)m.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	(void)m.send_raw(tmem, at(5000), nodeid_num(0, 631), {})!!;
+	char[256] store;
+	ArenaAllocator none;
+	none.init(store[:0]);
+	Allocator real = m.allocator;
+	m.allocator = &none;
+	m.handle_timeout(at(1500))!!;                                                           // nine requests expire, the ninth event is lost
+	m.allocator = real;
+	int responses = 0;
+	EventKind last = EventKind.CHANNEL_OPEN;
+	Event e;
+	while (m.poll_event(&e))
+	{
+		if (e.kind == EventKind.RESPONSE) responses++;
+		last = e.kind;
+	}
+	assert(last == EventKind.FAILED && m.state == State.FAILED && m.failure == BUFFER_FULL);
+	assert(m.pending_count == 0, "no request is left without an answer");
+	assert(responses == 9, "eight queued answers and the request that was still pending");
+	ulong d;
+	assert(!m.next_deadline(&d), "a failed machine schedules nothing");
+}
+
+fn void robust_terminal_states_have_no_deadline() @test
+{
+	Machine m;
+	m.init(mem, test_config());
+	defer m.free();
+	FakeServer s = fake_server();
+	ulong d;
+	assert(!m.next_deadline(&d));
+	open_channel(&m, &s);
+	(void)m.send_raw(tmem, at(1), nodeid_num(0, 631), {})!!;
+	assert(m.next_deadline(&d));
+	m.transport_closed(at(2));
+	assert(m.state == State.FAILED && !m.next_deadline(&d));
+	Machine c;
+	c.init(mem, test_config());
+	defer c.free();
+	FakeServer t = fake_server();
+	open_channel(&c, &t);
+	c.close(at(1))!!;
+	eat(&c);
+	assert(c.state == State.CLOSED && !c.next_deadline(&d));
+}
