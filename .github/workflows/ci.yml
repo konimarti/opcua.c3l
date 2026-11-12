@@ -1,4 +1,5 @@
 # CI: Linux, macOS and Windows build and test jobs plus a Linux job against the open62541 and asyncua peers.
+# Every action is pinned to a commit, every tool to an exact version (c3c release tag, pip ==, git tag + commit check).
 # The compiler archives are downloaded without a checksum check (no checksums are published to compare with: verify).
 # Written for review; it is never pushed by the coder (Hermes shows Koni the diff first).
 name: ci
@@ -20,21 +21,40 @@ on:
 env:
   C3_VERSION: ${{ github.event.inputs.version || 'v0.8.6' }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install c3c
         run: |
-          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o c3.tar.gz   # asset name: verify
-          sudo mkdir -p /opt/c3 && sudo tar -xzf c3.tar.gz -C /opt/c3 --strip-components=1
-          echo "/opt/c3" >> "$GITHUB_PATH"
-      - run: c3c test
-      - run: c3c build uatool
-      - run: tools/check-lib-symbols.sh
+          set -euo pipefail
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o "$RUNNER_TEMP/c3.tar.gz"   # asset name: verify
+          mkdir -p "$HOME/c3"
+          tar -xzf "$RUNNER_TEMP/c3.tar.gz" -C "$HOME/c3"
+          bin=$(find "$HOME/c3" -name c3c -type f | head -n 1)
+          chmod +x "$bin"
+          dirname "$bin" >> "$GITHUB_PATH"
+      - name: Versions
+        run: |
+          c3c --version
+          uname -a
+      - name: Tests (including version_matches_project_json)
+        run: c3c test
+      - name: Build every CLI target
+        run: |
+          c3c build uatool
+          c3c build uagen
+      - name: The static library exports no tool symbols
+        run: tools/check-lib-symbols.sh
       - name: Generated files are up to date
         run: c3c run uagen -- --check
+      - name: uatool reports the library version
+        run: build/uatool --version
       - name: Tests under AddressSanitizer
         timeout-minutes: 20
         run: c3c test --sanitize=address     # flag name: verify for 0.8.6
@@ -42,58 +62,115 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install c3c
         run: |
-          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-macos.zip" -o c3.zip   # asset name: verify
-          mkdir -p "$HOME/c3" && unzip -q c3.zip -d "$HOME/c3"
-          echo "$HOME/c3" >> "$GITHUB_PATH"
-      - run: c3c test
-      - run: c3c build uatool
+          set -euo pipefail
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-macos.zip" -o "$RUNNER_TEMP/c3.zip"   # asset name: verify
+          mkdir -p "$HOME/c3"
+          unzip -q "$RUNNER_TEMP/c3.zip" -d "$HOME/c3"
+          bin=$(find "$HOME/c3" -name c3c -type f | head -n 1)
+          chmod +x "$bin"
+          dirname "$bin" >> "$GITHUB_PATH"
+      - name: Versions
+        run: |
+          c3c --version
+          uname -a
+      - name: Tests (including version_matches_project_json)
+        run: c3c test
+      - name: Build every CLI target
+        run: |
+          c3c build uatool
+          c3c build uagen
+      - name: uatool reports the library version
+        run: build/uatool --version
 
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install c3c
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/c3lang/c3c/releases/download/$env:C3_VERSION/c3-windows.zip" -OutFile c3.zip   # asset name: verify
-          Expand-Archive c3.zip -DestinationPath C:\c3
-          "C:\c3" | Out-File -FilePath $env:GITHUB_PATH -Append
-      - run: c3c test
-      - run: c3c build uatool
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $env:RUNNER_TEMP "c3.zip"
+          Invoke-WebRequest "https://github.com/c3lang/c3c/releases/download/$env:C3_VERSION/c3-windows.zip" -OutFile $zip   # asset name: verify
+          $dest = Join-Path $env:USERPROFILE "c3"
+          Expand-Archive $zip -DestinationPath $dest
+          $exe = Get-ChildItem -Path $dest -Recurse -Filter c3c.exe | Select-Object -First 1
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Versions
+        run: |
+          c3c --version
+          uname -s
+      - name: Tests (including version_matches_project_json)
+        run: c3c test
+      - name: Build every CLI target
+        run: |
+          c3c build uatool
+          c3c build uagen
+      - name: uatool reports the library version
+        run: build/uatool.exe --version
 
   peers:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install c3c
         run: |
-          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o c3.tar.gz
-          sudo mkdir -p /opt/c3 && sudo tar -xzf c3.tar.gz -C /opt/c3 --strip-components=1
-          echo "/opt/c3" >> "$GITHUB_PATH"
+          set -euo pipefail
+          curl -fsSL "https://github.com/c3lang/c3c/releases/download/${C3_VERSION}/c3-linux.tar.gz" -o "$RUNNER_TEMP/c3.tar.gz"
+          mkdir -p "$HOME/c3"
+          tar -xzf "$RUNNER_TEMP/c3.tar.gz" -C "$HOME/c3"
+          bin=$(find "$HOME/c3" -name c3c -type f | head -n 1)
+          chmod +x "$bin"
+          dirname "$bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Versions of the tools that are not pinned here
+        run: |
+          c3c --version
+          cmake --version | head -n 1
+          gcc --version | head -n 1
+          python3 --version
       - name: open62541 (cached build, run only)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         id: open62541
         with:
           path: .work/peer/open62541
-          key: open62541-v1.5.10
+          key: open62541-v1.5.10-93c3bdfc9ea4718b503c6cbf57876237addd0f2c
       - name: Build open62541 without encryption
         if: steps.open62541.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           # Build recipe (verify target names against the open62541 v1.5.10 tree): the example servers without encryption.
           git clone --depth 1 --branch v1.5.10 https://github.com/open62541/open62541.git /tmp/open62541
+          test "$(git -C /tmp/open62541 rev-parse HEAD)" = "93c3bdfc9ea4718b503c6cbf57876237addd0f2c"
           cmake -S /tmp/open62541 -B /tmp/open62541/build -DCMAKE_BUILD_TYPE=Release -DUA_ENABLE_ENCRYPTION=OFF \
             -DUA_BUILD_EXAMPLES=ON -DUA_BUILD_UNIT_TESTS=ON -DUA_NAMESPACE_ZERO=FULL
           cmake --build /tmp/open62541/build --target ci_server access_control_server tutorial_server_firststeps -j 4
           mkdir -p .work/peer/open62541
           cp /tmp/open62541/build/bin/ci_server /tmp/open62541/build/bin/access_control_server /tmp/open62541/build/bin/tutorial_server_firststeps .work/peer/open62541/
-      - name: asyncua in a venv
+      - name: asyncua in a venv (exact version)
         run: |
+          set -euo pipefail
           python3 -m venv .work/peer/venv
           .work/peer/venv/bin/pip install asyncua==2.1.0
+          .work/peer/venv/bin/pip list --format=freeze | grep -i '^asyncua=='
+      - name: Build uatool
+        run: c3c build uatool
       - name: Suite against open62541
         run: peers/run-peer-suite.sh open62541
+      - name: uatool write guard against open62541
+        run: |
+          peers/peer.sh start open62541
+          trap 'peers/peer.sh stop open62541' EXIT
+          sh src/uatool/test.sh
       - name: Suite against asyncua
         run: peers/run-peer-suite.sh asyncua
+      - name: uatool write guard against asyncua
+        run: |
+          peers/peer.sh start asyncua
+          trap 'peers/peer.sh stop asyncua' EXIT
+          sh src/uatool/test.sh
