@@ -107,28 +107,29 @@ fn void peer_renewal_survives_a_paused_peer() @test
 		return;
 	$else
 		Config cfg = peer_default_config();
-		cfg.channel_lifetime_ms = 4000;
+		cfg.channel_lifetime_ms = 8000;
 		cfg.request_timeout_ms = 300;
 		PeerConn* c = peer_connect(&pc, cfg)!!;
 		defer c.drop();
-		if (c.client.machine.lifetime_ms != 4000)
+		if (c.client.machine.lifetime_ms != 8000)
 		{
-			peer_skip_reason("the peer does not honour a 4000 ms channel lifetime");
+			peer_skip_reason("the peer does not honour an 8000 ms channel lifetime");
 			return;
 		}
 		Clock start = clock::now();
 		bool stopped = false;
 		bool resumed = false;
-		// the renewal is due at 3000 ms and the old token ends at 4000 ms: stop the peer at 2800 ms, resume it at 3700 ms
-		while (elapsed_ms(start) < 3990 && c.client.renewals == 0)
+		// The renewal is due at 6000 ms and the old token ends at 8000 ms: stop the peer at 5600 ms and resume it at 7000 ms. A full
+		// second is left between the resume and the end of the old token, so a slow machine does not decide the outcome.
+		while (elapsed_ms(start) < 7900 && c.client.renewals == 0)
 		{
 			long t = elapsed_ms(start);
-			if (!stopped && t >= 2800)
+			if (!stopped && t >= 5600)
 			{
 				posix::kill(pid, 19);                   // SIGSTOP
 				stopped = true;
 			}
-			if (stopped && !resumed && t >= 3700)
+			if (stopped && !resumed && t >= 7000)
 			{
 				posix::kill(pid, 18);                   // SIGCONT
 				resumed = true;
