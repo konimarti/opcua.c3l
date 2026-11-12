@@ -149,38 +149,41 @@ fn void? Encoder.put_guid(&self, Guid v)
 }
 
 // NodeId (5.2.2.9): the smallest of TwoByte (0x00), FourByte (0x01), Numeric (0x02) for numeric ids.
-fn void? Encoder.put_nodeid(&self, NodeId v)
+fn void? Encoder.put_nodeid(&self, NodeId v) => self.put_nodeid_flagged(v, 0);
+
+// Same, with the ExpandedNodeId flag bits (0x80 NamespaceUri, 0x40 ServerIndex) or-ed into the encoding byte.
+fn void? Encoder.put_nodeid_flagged(&self, NodeId v, char flags)
 {
 	switch (v.kind)
 	{
 		case NUMERIC:
 			if (v.ns == 0 && v.num <= 255)
 			{
-				self.put_u8(0x00)!;
+				self.put_u8(0x00 | flags)!;
 				self.put_u8((char)v.num)!;
 			}
 			else if (v.ns <= 255 && v.num <= 65535)
 			{
-				self.put_u8(0x01)!;
+				self.put_u8(0x01 | flags)!;
 				self.put_u8((char)v.ns)!;
 				self.put_u16((ushort)v.num)!;
 			}
 			else
 			{
-				self.put_u8(0x02)!;
+				self.put_u8(0x02 | flags)!;
 				self.put_u16(v.ns)!;
 				self.put_u32(v.num)!;
 			}
 		case STRING:
-			self.put_u8(0x03)!;
+			self.put_u8(0x03 | flags)!;
 			self.put_u16(v.ns)!;
 			self.put_string(v.str)!;
 		case GUID:
-			self.put_u8(0x04)!;
+			self.put_u8(0x04 | flags)!;
 			self.put_u16(v.ns)!;
 			self.put_guid(v.guid)!;
 		case OPAQUE:
-			self.put_u8(0x05)!;
+			self.put_u8(0x05 | flags)!;
 			self.put_u16(v.ns)!;
 			self.put_bytestring(v.bytes)!;
 	}
@@ -208,6 +211,15 @@ struct Decoder
 
 fn Decoder decoder(char[] input, Allocator allocator, Limits limits = default_limits()) => { .input = input, .allocator = allocator, .limits = limits, .validate_utf8 = true };
 fn sz Decoder.remaining(&self) => self.input.len - self.pos;
+
+// Recursion guard for Variant / DataValue / DiagnosticInfo nesting.
+fn void? Decoder.enter(&self)
+{
+	if (self.depth >= self.limits.max_depth) return DEPTH_EXCEEDED~;
+	self.depth++;
+}
+
+fn void Decoder.leave(&self) => self.depth--;
 
 fn char[]? Decoder.take(&self, sz n)
 {
@@ -302,8 +314,18 @@ fn Guid? Decoder.get_guid(&self)
 // ExpandedNodeId and are BAD_NODEID here.
 fn NodeId? Decoder.get_nodeid(&self)
 {
+	char flags;
+	NodeId id = self.get_nodeid_flagged(&flags)!;
+	if (flags != 0) return BAD_NODEID~;
+	return id;
+}
+
+// Returns the ExpandedNodeId flag bits (0x80, 0x40) of the encoding byte in *flags.
+fn NodeId? Decoder.get_nodeid_flagged(&self, char* flags)
+{
 	char enc = self.get_u8()!;
-	if ((enc & 0xC0) != 0) return BAD_NODEID~;
+	*flags = enc & 0xC0;
+	enc &= 0x3F;
 	NodeId id;
 	switch (enc)
 	{

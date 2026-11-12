@@ -43,3 +43,134 @@ struct NodeId
 fn bool status_is_good(StatusCode s) => ((uint)s >> 30) == 0;
 fn bool status_is_uncertain(StatusCode s) => ((uint)s >> 30) == 1;
 fn bool status_is_bad(StatusCode s) => ((uint)s >> 30) >= 2;
+
+typedef UaDateTime = long;                 // 100 ns ticks since 1601-01-01 UTC (10000-6 5.2.2.5); not std::time::DateTime
+
+struct ExpandedNodeId
+{
+	NodeId id;
+	String namespace_uri;   // null = flag 0x80 absent; empty non-null = flag set with an empty URI
+	uint server_index;      // 0 = flag 0x40 absent
+}
+
+struct QualifiedName
+{
+	ushort ns;
+	String name;
+}
+
+struct LocalizedText
+{
+	String locale;          // null = absent
+	String text;            // null = absent
+}
+
+struct ExtensionObject
+{
+	NodeId type_id;      // the DefaultBinary encoding id as on the wire
+	char encoding;       // 0 = no body, 1 = ByteString body, 2 = XmlElement body (kept as received)
+	char[] body;         // raw body (null when encoding is 0 or the body length is -1)
+}
+
+// present holds the wire bits of the four Int32 fields (0x01 symbolic_id, 0x02 namespace_uri, 0x04 localized_text,
+// 0x08 locale): zero is a valid string table index, so presence cannot be derived from the value. The other three
+// fields are present when additional_info is not null, inner_status != 0 and inner != null.
+struct DiagnosticInfo
+{
+	char present;
+	int symbolic_id;
+	int namespace_uri;
+	int localized_text;
+	int locale;
+	String additional_info;
+	StatusCode inner_status;
+	DiagnosticInfo* inner;   // allocated from the decode allocator
+}
+
+// BuiltInType ids, 10000-6 5.1.2
+constdef BuiltIn : char
+{
+	EMPTY = 0, BOOLEAN = 1, SBYTE = 2, BYTE = 3, INT16 = 4, UINT16 = 5, INT32 = 6, UINT32 = 7,
+	INT64 = 8, UINT64 = 9, FLOAT = 10, DOUBLE = 11, STRING = 12, DATETIME = 13, GUID = 14,
+	BYTESTRING = 15, XMLELEMENT = 16, NODEID = 17, EXPANDEDNODEID = 18, STATUSCODE = 19,
+	QUALIFIEDNAME = 20, LOCALIZEDTEXT = 21, EXTENSIONOBJECT = 22, DATAVALUE = 23,
+	VARIANT = 24, DIAGNOSTICINFO = 25,
+}
+
+union Scalar
+{
+	bool b;
+	ichar i8;
+	char u8;
+	short i16;
+	ushort u16;
+	int i32;
+	uint u32;
+	long i64;
+	ulong u64;
+	float f32;
+	double f64;
+	String str;          // String, XmlElement
+	char[] bytes;        // ByteString
+	Guid guid;
+	UaDateTime dt;
+	StatusCode sc;
+	NodeId* node_id;
+	ExpandedNodeId* xnode_id;
+	QualifiedName* qname;
+	LocalizedText* ltext;
+	ExtensionObject* ext;
+	DataValue* dv;
+	DiagnosticInfo* diag;
+}
+
+// Typed arrays: the slice that matches Variant.type is valid when is_array. Row-major for matrices.
+union ArrayData
+{
+	bool[] b;
+	ichar[] i8;
+	char[] u8;
+	short[] i16;
+	ushort[] u16;
+	int[] i32;
+	uint[] u32;
+	long[] i64;
+	ulong[] u64;
+	float[] f32;
+	double[] f64;
+	String[] str;
+	char[][] bytes;
+	Guid[] guid;
+	UaDateTime[] dt;
+	StatusCode[] sc;
+	NodeId[] node_id;
+	ExpandedNodeId[] xnode_id;
+	QualifiedName[] qname;
+	LocalizedText[] ltext;
+	ExtensionObject[] ext;
+	DataValue[] dv;
+	Variant[] variant;
+	DiagnosticInfo[] diag;
+}
+
+struct Variant
+{
+	BuiltIn type;         // EMPTY = null variant
+	bool is_array;
+	Scalar scalar;        // valid when !is_array
+	ArrayData array;      // valid when is_array; a null slice = null array (length -1), empty non-null = length 0
+	uint[] dims;          // ArrayDimensions, empty unless matrix
+}
+
+// DataValue has no stored mask. Encoding rule, purely from the fields: value present iff has_value; status iff != 0;
+// source/server timestamp iff != 0; picoseconds iff != 0. Decoding an absent part leaves it 0 (Good / null time).
+struct DataValue
+{
+	Variant value;
+	bool has_value;
+	StatusCode status;
+	UaDateTime source_ts;
+	ushort source_pico;
+	UaDateTime server_ts;
+	ushort server_pico;
+}
