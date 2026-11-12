@@ -114,3 +114,42 @@ fn char[] FakeServer.activate_response(&self, uint request_id, uint handle, uint
 {
 	return self.msg(request_id, handle, token, ID_ACTIVATE_SESSION_RESPONSE, ACTIVATE_PAYLOAD, result);
 }
+
+// ---------- discovery, browse and translate templates ----------
+const String ID_GET_ENDPOINTS_RESPONSE = "01 00 AF 01";
+const String ID_FIND_SERVERS_RESPONSE = "01 00 A9 01";
+const String ID_FIND_SERVERS_ON_NETWORK_RESPONSE = "01 00 B1 2F";
+const String ID_BROWSE_RESPONSE = "01 00 12 02";
+const String ID_BROWSE_NEXT_RESPONSE = "01 00 18 02";
+const String ID_TRANSLATE_RESPONSE = "01 00 2D 02";
+const String B10_GET_ENDPOINTS = "4D 53 47 46 5D 00 00 00 07 00 00 00 02 00 00 00 05 00 00 00 02 00 00 00 01 00 AC 01 00 00 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 FF FF FF FF 10 27 00 00 00 00 00 18 00 00 00 6F 70 63 2E 74 63 70 3A 2F 2F 6C 6F 63 61 6C 68 6F 73 74 3A 34 38 34 30 FF FF FF FF FF FF FF FF";
+
+// A response whose body after the type id is given as hex (header included): for malformed headers.
+fn char[] FakeServer.msg_body(&self, uint request_id, uint token, String type, String body)
+{
+	uint s = self.seq++;
+	return fs_frame("4D 53 47 46", string::tformat("%s %s %s %s %s %s", le32(self.channel), le32(token), le32(s), le32(request_id), type, body));
+}
+
+// One chunk of a message (kind 'C' or 'F') with this server's channel, a fresh sequence number and the given body.
+fn char[] FakeServer.chunk(&self, char kind, uint request_id, uint token, char[] body)
+{
+	uint s = self.seq++;
+	char[] head = unhex(string::tformat("4D 53 47 00 00 00 00 00 %s %s %s %s", le32(self.channel), le32(token), le32(s), le32(request_id)));
+	head[3] = kind;
+	char[] frame = cat(head, body);
+	frame[4] = (char)(frame.len & 0xFF);
+	frame[5] = (char)(frame.len >> 8);
+	return frame;
+}
+
+// One ReferenceDescription as hex: the reference type i=33, forward, target i=85, browse and display name `name`, Object.
+fn String ref_hex(String name)
+{
+	return string::tformat("00 21 01 00 55 00 00 %s 02 %s 01 00 00 00 00 00", str_hex(name), str_hex(name));
+}
+
+fn String browse_payload(String continuation, uint refs, String refs_hex)
+{
+	return string::tformat("01 00 00 00 00 00 00 00 %s %s %s 00 00 00 00", continuation, le32(refs), refs_hex);
+}
