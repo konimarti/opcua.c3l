@@ -241,3 +241,29 @@ fn void peer_wrong_endpoint_path() @test
 	}
 	assert(elapsed_ms(start) < 12000, "no hang");
 }
+
+// FindServers and FindServersOnNetwork: a server without the second service answers Bad_ServiceUnsupported or
+// Bad_NotImplemented, which is a skip with a reason, not a failure.
+fn void peer_find_servers_and_on_network() @test
+{
+	PeerConfig pc = peer_config();
+	if (peer_skip(&pc)) return;
+	DynamicArenaAllocator arena;
+	arena.init(mem, 8192);
+	defer arena.free();
+	PeerConn* c = peer_connect(&pc, peer_default_config())!!;
+	defer c.drop();
+	ApplicationDescription[] servers = c.client.find_servers(&arena)!!;
+	assert(servers.len >= 1, "the server lists itself");
+	ServerOnNetwork[]? net = c.client.find_servers_on_network(&arena);
+	if (catch err = net)
+	{
+		uint status = (uint)c.client.last_status;
+		assert(err == SERVICE_FAULT && (status == 0x800B0000 || status == 0x80400000 || status == 0x801F0000), "only an unsupported or not permitted service may fail");     // asyncua: BadUserAccessDenied, its rules do not list the service
+		peer_note(string::tformat("OBSERVED: FindServersOnNetwork answered %s", status_name(c.client.last_status)));
+		peer_skip_reason("the peer does not implement FindServersOnNetwork");
+		return;
+	}
+	peer_note(string::tformat("OBSERVED: FindServersOnNetwork returned %d servers", net.len));
+	assert(c.client.machine.state == State.CHANNEL_OPEN);
+}

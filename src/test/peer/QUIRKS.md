@@ -59,6 +59,11 @@
   exercised with open62541.
 * The Add method checks its argument count with a Python TypeError (a call with one argument is answered with a Bad status).
 
+## FindServers and FindServersOnNetwork
+* Both peers answer FindServers with themselves. FindServersOnNetwork: open62541 answers `BadServiceUnsupported`; asyncua answers
+  `BadUserAccessDenied` (its permission rules do not list the service, the same as for BrowseNext). The peer test treats both as a
+  skip with a reason (`SKIP: the peer does not implement FindServersOnNetwork`); any other failure is a failure.
+
 ## Renewal (both peers, requested lifetime 4 000 ms)
 * Ten seconds with `service()`: 3 renewals, 0 renew failures, every read good.
 * Peer stopped (SIGSTOP) at 2 800 ms and continued at 3 700 ms: 2 `CHANNEL_RENEW_FAILED` events, then the renewal is answered and
