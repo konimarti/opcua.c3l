@@ -10,6 +10,11 @@
 * A read that returns 0 bytes is the peer's orderly shutdown (`CLOSED`); the adapter then calls `Machine.transport_closed`, which
   reports `TRANSPORT_TRUNCATED` when it happens in the middle of a frame.
 
+## Client nonce
+* The 32 byte client nonce is taken from `random::entropy()` as it is (`Config.nonce_entropy`); `nonce_seed` (a splitmix64
+  generator) is only the fallback for a config without entropy. Under policy None the nonce is unused; a signing policy must keep
+  the entropy path.
+
 ## Peer behaviour
 * Not observed yet: no peer was available when this was written. `peer_idle_without_service` prints an `OBSERVED:` line for the
   outcome of a read after an idle period longer than the channel lifetime without `service()`; copy that result here after the

@@ -1,5 +1,6 @@
 module opcua;                // the tool is part of the library module so that it can use every name unqualified
 import std::io;
+import std::os::env;
 import std::time;
 
 // uatool endpoints|browse|read|write: a small command line client (exit codes: 0 ok, 1 error, 2 usage or refused).
@@ -26,6 +27,7 @@ fn int usage()
 	io::eprintn("       uatool read      <url> <nodeid>... [--attr value|browsename|displayname|datatype]");
 	io::eprintn("       uatool write     <url> <nodeid> <type:value> --allow-write [--user U --password P --allow-cleartext-password]");
 	io::eprintn("options: --verbose (redacted trace on stderr), --user U --password P --allow-cleartext-password");
+	io::eprintn("         --password-env NAME reads the password from that environment variable (keeps it out of the process list)");
 	io::eprintn("write types: i32, u32, f64, bool, str");
 	return 2;
 }
@@ -52,12 +54,22 @@ fn bool parse_args(String[] argv, Options* o)
 		{
 			o.verbose = true;
 		}
-		else if (a == "--user" || a == "--password" || a == "--node" || a == "--attr" || a == "--depth")
+		else if (a == "--user" || a == "--password" || a == "--password-env" || a == "--node" || a == "--attr" || a == "--depth")
 		{
 			if (i + 1 >= argv.len) return false;
 			String v = argv[++i];
 			if (a == "--user") o.user = v;
 			if (a == "--password") o.password = v;
+			if (a == "--password-env")
+			{
+				String? pw = env::tget_var(v);
+				if (catch pw)
+				{
+					io::eprintfn("environment variable %s is not set", v);
+					return false;
+				}
+				o.password = pw;
+			}
 			if (a == "--node") o.node = v;
 			if (a == "--attr") o.attr = v;
 			if (a == "--depth")
