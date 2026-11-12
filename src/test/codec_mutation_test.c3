@@ -1,6 +1,6 @@
 module opcua;
 
-// Smoke mutation test: fixed-seed random byte changes over every M1 vector. The decoder must return a value or a
+// Smoke mutation test: fixed-seed random byte changes over every vector of this file. The decoder must return a value or a
 // fault, never crash, and its allocations stay tiny (the inputs are tiny; a length claim must not buy memory).
 
 struct Vector

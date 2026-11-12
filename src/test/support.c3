@@ -36,7 +36,7 @@ fn char[] unhex(String s)
 
 fn Decoder dec(String hex) => decoder(unhex(hex), tmem);
 
-// The built-in kinds the M1 codec can decode, for the generic sweeps.
+// The built-in kinds the codec can decode, for the generic sweeps.
 enum Kind { BOOL, U16, U32, U64, F32, F64, STRING, BYTES, GUID, NODEID }
 
 fn void? decode_kind(Decoder* d, Kind k)
