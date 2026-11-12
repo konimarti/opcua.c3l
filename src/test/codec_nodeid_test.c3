@@ -1,7 +1,7 @@
 module opcua;
 
 // NodeId binary encoding (OPC 10000-6 5.2.2.9), identity (10000-3 8.2) and text form (10000-6 5.3.1.10).
-// Vectors N1-N11, M46-M50 plus designer extras.
+// Vectors N1-N11, M46-M50 plus extras.
 
 fn Guid test_guid()
 {
@@ -27,15 +27,15 @@ fn void fixtures_nodeid_numeric() @test
 	check_nodeid("01 01 E8 03", nodeid_num(1, 1000));                          // N3
 	check_nodeid("01 00 D2 08", nodeid_num(0, 2258));                          // N4
 	check_nodeid("02 2C 01 70 11 01 00", nodeid_num(300, 70000));              // N5
-	check_nodeid("00 55", nodeid_num(0, 85));                                  // designer extra
-	check_nodeid("01 02 E8 03", nodeid_num(2, 1000));                          // designer extra
+	check_nodeid("00 55", nodeid_num(0, 85));                                  // extra
+	check_nodeid("01 02 E8 03", nodeid_num(2, 1000));                          // extra
 }
 
 fn void fixtures_nodeid_string() @test
 {
 	check_nodeid("03 02 00 05 00 00 00 48 65 6C 6C 6F", nodeid_str(2, "Hello"));                    // N6
 	check_nodeid("03 01 00 06 00 00 00 48 6F 74 E6 B0 B4", nodeid_str(1, "Hot水"));                  // N7
-	check_nodeid("03 01 00 03 00 00 00 48 6F 74", nodeid_str(1, "Hot"));                            // designer extra
+	check_nodeid("03 01 00 03 00 00 00 48 6F 74", nodeid_str(1, "Hot"));                            // extra
 }
 
 fn void fixtures_nodeid_guid_opaque() @test

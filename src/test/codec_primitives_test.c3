@@ -1,6 +1,6 @@
 module opcua;
 
-// Fixtures: reviewer vectors V1-V9, V21, V22 plus designer extras (OPC 10000-6 5.2.2.1 - 5.2.2.3).
+// Fixtures: vectors V1-V9, V21, V22 plus extras (OPC 10000-6 5.2.2.1 - 5.2.2.3).
 
 fn void fixtures_boolean() @test
 {
@@ -39,7 +39,7 @@ fn void fixtures_floats() @test
 	assert(enc_f32(1.5f) == unhex("00 00 C0 3F"));            // V5
 	Decoder d1 = dec("00 00 C0 3F");
 	assert(d1.get_f32()!! == 1.5f);
-	assert(enc_f32(-6.5f) == unhex("00 00 D0 C0"));           // designer extra
+	assert(enc_f32(-6.5f) == unhex("00 00 D0 C0"));           // extra
 	assert(enc_f64(1.0) == unhex("00 00 00 00 00 00 F0 3F")); // V6
 	Decoder d2 = dec("00 00 00 00 00 00 F0 3F");
 	assert(d2.get_f64()!! == 1.0);
