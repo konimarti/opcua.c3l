@@ -281,6 +281,32 @@ fn void interleave_mixed_message_types_are_refused() @test
 	assert(next_fails(&r, BAD_CHUNK));                                                    // M23: one message, two types
 }
 
+// M23: an unfinished request A followed by the final chunk of request B. Policy: reassembly is keyed by request id, so
+// B completes by itself and A stays pending.
+fn void interleave_final_of_another_request() @test
+{
+	ChunkReader r = new_reader();
+	defer r.free();
+	r.feed(mk_chunk('C', 1, 10, unhex("01")))!!;
+	r.feed(mk_chunk('F', 2, 20, unhex("02")))!!;
+	Message m = pull(&r);
+	assert(m.request_id == 20 && m.body == unhex("02"));
+	assert(nothing_more(&r) && r.mid_frame() && r.partial_count == 1);
+	r.feed(mk_chunk('F', 3, 10, unhex("03")))!!;
+	assert(pull(&r).body == unhex("01 03"));
+}
+
+// M8: the stream ends after a complete header whose frame is not finished: that is mid-frame, not a clean end.
+fn void fixtures_truncated_stream() @test
+{
+	ChunkReader r = new_reader();
+	defer r.free();
+	assert(!r.mid_frame());
+	r.feed(unhex("48 45 4C 46 38 00 00 00"))!!;
+	assert(nothing_more(&r));
+	assert(r.mid_frame());
+}
+
 fn void interleave_reader_after_fault_is_closed() @test
 {
 	ChunkReader r = new_reader();
@@ -510,6 +536,31 @@ fn void min_sizes_open() @test
 	assert(frame_fails("4F 50 4E 46 20 00 00 00 00 00 00 00 08 00 00 00 41 41 41 41 41 41 41 41 FF FF FF FF FF FF FF FF", BAD_CHUNK));
 }
 
+fn void open_request_bytes() @test
+{
+	ByteBuf b;
+	b.init(tmem);
+	ChunkWriter w = chunk_writer(65536);
+	w.write_open(&b, 0, 1, unhex(B4_BODY))!!;
+	assert(b.bytes() == cat(unhex(B4_HEAD), unhex(B4_BODY)));
+	assert(b.len == 132);
+	ChunkReader r = new_reader();
+	defer r.free();
+	r.feed(b.bytes())!!;
+	Message m = pull(&r);
+	assert(m.type == MsgType.OPN && m.policy_uri == POLICY_NONE && m.body == unhex(B4_BODY) && m.request_id == 1);
+	ChunkReader c = new_reader();
+	defer c.free();
+	c.feed(unhex(B6_CLO))!!;
+	Message close = pull(&c);
+	assert(close.type == MsgType.CLO && close.channel_id == 7 && close.token_id == 2 && close.request_id == 3 && close.body.len == 33);
+	ChunkReader s = new_reader();
+	defer s.free();
+	s.feed(unhex(B8_RESPONSE))!!;
+	Message resp = pull(&s);
+	assert(resp.request_id == 4 && resp.body.len == 42);
+}
+
 fn void open_policy_uri_is_returned() @test
 {
 	ByteBuf b;
@@ -653,7 +704,10 @@ fn void security_hook_sizes_and_roundtrip() @test
 // ---------- sweeps ----------
 fn char[][] all_valid_streams()
 {
-	char[][] v = alloc::alloc_array(tmem, char[], 9);
+	char[][] v = alloc::alloc_array(tmem, char[], 12);
+	v[9] = cat(unhex(B4_HEAD), unhex(B4_BODY));
+	v[10] = unhex(B6_CLO);
+	v[11] = unhex(B8_RESPONSE);
 	v[0] = unhex(B1_HEL);
 	v[1] = unhex(B2_ACK);
 	v[2] = unhex(B3_ERR);
