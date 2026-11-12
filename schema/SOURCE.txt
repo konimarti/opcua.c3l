@@ -1,0 +1,2 @@
+https://github.com/OPCFoundation/UA-Nodeset
+2cfb50aba4e0fad4adfaebe987876406abf2bd3a
