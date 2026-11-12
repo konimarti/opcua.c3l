@@ -128,8 +128,9 @@ fn void? Machine.queue_activate(&self, Now now)
 	if (ep == null) return BAD_STATE~;
 	UserTokenPolicy* policy = find_token_policy(ep, self.identity.type);
 	if (policy == null || is_null(policy.policy_id)) return BAD_STATE~;
-	// A password under a policy that names a security policy would have to be encrypted: never sent in the clear.
-	if (self.identity.type == UserTokenType.USER_NAME && policy.security_policy_uri.len != 0) return SECURITY_UNSUPPORTED~;
+	// A password under a policy that names a real security policy would have to be encrypted: never sent in the clear. A policy
+	// that names None (servers like asyncua do) means no encryption: the opt-in in open_session already allowed that.
+	if (self.identity.type == UserTokenType.USER_NAME && policy.security_policy_uri.len != 0 && policy.security_policy_uri != POLICY_NONE) return SECURITY_UNSUPPORTED~;
 	ByteBuf tb;
 	tb.init(self.allocator, 64);
 	defer tb.free();
