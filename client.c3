@@ -26,28 +26,37 @@ struct Client
 
 fn Duration default_io_timeout() => time::sec(10);
 
-fn ulong entropy_seed()
+fn bool all_zero(char[] b)
 {
-	char[32] e = random::entropy();
-	ulong v = 0;
-	for (sz i = 0; i < 8; i++) v = v << 8 | e[i];
-	return v;
+	foreach (x : b)
+	{
+		if (x != 0) return false;
+	}
+	return true;
 }
 
-// connect: HEL/ACK, OPN over an already connected transport. After it returns the channel is open. `config.nonce_seed` is
-// taken from the OS entropy when it is 0.
+// connect: HEL/ACK, OPN over an already connected transport. After it returns the channel is open. The client takes ownership
+// of the transport on success and on failure: Client.free (or a failed connect) closes it. The client nonce comes from the
+// OS entropy unless the config brings its own.
 fn Client*? client_connect(Allocator allocator, Transport transport, String endpoint_url, Config config = default_config(), bool verbose = false)
 {
-	if (config.nonce_seed == 0) config.nonce_seed = entropy_seed();
+	if (all_zero(config.nonce_entropy[:32]) && config.nonce_seed == 0) config.nonce_entropy = random::entropy();
 	Client* c = alloc::new_try(allocator, Client)!;
 	*c = {};
 	c.allocator = allocator;
 	c.transport = transport;
 	c.io_timeout = default_io_timeout();
 	c.verbose = verbose;
-	c.io_buf = alloc::alloc_array_try(allocator, char, 16384)!;
-	c.trace_out.init(allocator);
-	c.trace_in.init(allocator);
+	c.machine.init(allocator, config);                   // from here on c.free() is safe on every path
+	c.trace_out.init(allocator, config.receive_buffer_size);
+	c.trace_in.init(allocator, config.receive_buffer_size);
+	char[]? buf = alloc::alloc_array_try(allocator, char, 16384);
+	if (catch err = buf)
+	{
+		c.free();
+		return err~;
+	}
+	c.io_buf = buf;
 	char[]? url = alloc::alloc_array_try(allocator, char, endpoint_url.len + 1);
 	if (catch err = url)
 	{
@@ -56,7 +65,6 @@ fn Client*? client_connect(Allocator allocator, Transport transport, String endp
 	}
 	if (endpoint_url.len > 0) mem::copy(url.ptr, endpoint_url.ptr, endpoint_url.len);
 	c.endpoint_url = (String)url[:endpoint_url.len];
-	c.machine.init(allocator, config);
 	if (catch err = c.machine.connect(endpoint_url, clock_now()))
 	{
 		c.free();
@@ -130,7 +138,22 @@ fn void? Client.flush(&self)
 	{
 		char[] out = self.machine.pending_output();
 		if (self.verbose) self.trace_bytes(&self.trace_out, "> ", out);
-		self.transport.write(out, self.io_timeout)!;
+		if (catch err = self.transport.write(out, self.io_timeout))
+		{
+			// The machine must know: a chunk that was sent in part cannot be repaired, and after CLOSED nothing more goes out.
+			Now now = clock_now();
+			if (err == TIMEOUT)
+			{
+				self.machine.fail(TIMEOUT, now);
+			}
+			else
+			{
+				self.machine.transport_closed(now);
+			}
+			self.mirror_status();
+			if (self.machine.state == State.FAILED) return self.machine.failure~;
+			return err~;
+		}
 		self.machine.consume_output(out.len);
 	}
 }
@@ -320,8 +343,15 @@ fn BrowseResult? Client.browse(&self, Allocator alloc, NodeId node, BrowseDirect
 	foreach (r : result.references) merged.push(r);
 	char[] point = result.continuation_point;
 	StatusCode status = result.status_code;
+	uint pages = 0;
 	while (point.len > 0 && !status_is_bad(status))
 	{
+		pages++;
+		if (pages > self.machine.config.limits.max_browse_pages || merged.len() > self.machine.config.limits.max_browse_references)
+		{
+			self.release_point(alloc, point);                 // a server that never stops must not make the client grow without bound
+			return TOO_MANY_PAGES~;
+		}
 		char[][1] points = { point };
 		Response? next = self.browse_next(alloc, &points, false);
 		if (catch err = next)

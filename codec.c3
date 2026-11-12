@@ -75,9 +75,11 @@ struct Limits
 	uint max_pending_messages;    // default 16 (partially reassembled messages, keyed by RequestId)
 	uint max_reassembly_bytes;    // default = max_message_size: total bytes held by ALL partial messages together
 	uint max_outstanding_requests; // default 64
+	uint max_browse_pages;        // default 1000: BrowseNext rounds of one Client.browse
+	uint max_browse_references;   // default 1_000_000: references merged by one Client.browse
 }
 
-fn Limits default_limits() => { 1 << 20, 16 << 20, 1_000_000, 1_000_000, 32, 16 << 20, 64, 16, 16 << 20, 64 };
+fn Limits default_limits() => { 1 << 20, 16 << 20, 1_000_000, 1_000_000, 32, 16 << 20, 64, 16, 16 << 20, 64, 1000, 1_000_000 };
 
 // ---------- Encoder (OPC 10000-6 5.2, little endian) ----------
 struct Encoder

@@ -16,6 +16,7 @@ faultdef
 	BAD_HANDSHAKE,       // ACK/OPN-response violates the handshake rules (buffer < 8192, bad version, policy mismatch, channel id 0)
 	MESSAGE_TOO_LARGE,   // reassembled/outgoing message above a limit (local, ACK, MaxRequestMessageSize)
 	TOO_MANY_CHUNKS,     // > max_chunk_count
+	TOO_MANY_PAGES,      // Client.browse hit Limits.max_browse_pages or max_browse_references
 	TOO_MANY_PENDING,    // more partial messages / outstanding requests than the limits allow
 	PEER_ERROR,          // ERR message received; status in last_status
 	// --- secure channel ---
