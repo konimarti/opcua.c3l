@@ -30,6 +30,7 @@ struct Config
 	char[32] nonce_entropy;           // the client nonce itself, from OS entropy; all zero = derive it from nonce_seed
 	ulong nonce_seed;                 // PRNG seed for the client nonce; the adapter must fill it from OS entropy (0 gives the same nonce every time)
 	bool allow_cleartext_password;    // USERNAME over policy None is refused unless set
+	bool ignore_server_request_limit; // default false; true: do not apply the MaxRequestMessageSize the server announced (some servers announce more than they enforce)
 	bool allow_write;                 // default false; Write and Call refused with WRITE_NOT_ALLOWED when false
 	bool validate_utf8;               // default true; false: invalid UTF-8 is replaced by U+FFFD instead of BAD_ENCODING
 	bool strict_types;                // default false; true: unknown ExtensionObject types fail with UNKNOWN_TYPE
@@ -894,7 +895,7 @@ fn void? Machine.run_timers(&self, Now now)
 fn sz Machine.request_size_limit(&self)
 {
 	sz a = self.writer.max_message_size;
-	sz b = self.session_max_request;
+	sz b = self.config.ignore_server_request_limit ? 0 : self.session_max_request;
 	if (a == 0) return b;
 	if (b == 0) return a;
 	return a < b ? a : b;
