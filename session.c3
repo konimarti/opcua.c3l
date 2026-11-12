@@ -63,10 +63,22 @@ fn void? Machine.open_session(&self, Identity identity, Now now)
 	Identity keep = { identity.type, copy_string(a, identity.username)!, copy_string(a, identity.password)! };
 	self.nonce_state = self.config.nonce_seed;
 	char[32] nonce;
-	for (sz i = 0; i < 32; i += 8)
+	bool have_entropy = false;
+	foreach (b : self.config.nonce_entropy)
 	{
-		ulong r = self.next_random();
-		for (sz k = 0; k < 8; k++) nonce[i + k] = (char)(r >> (8 * k));
+		if (b != 0) have_entropy = true;
+	}
+	if (have_entropy)
+	{
+		for (sz i = 0; i < 32; i++) nonce[i] = self.config.nonce_entropy[i];     // the entropy itself, not a generator seeded by part of it
+	}
+	else
+	{
+		for (sz i = 0; i < 32; i += 8)
+		{
+			ulong r = self.next_random();
+			for (sz k = 0; k < 8; k++) nonce[i + k] = (char)(r >> (8 * k));
+		}
 	}
 	Config c = self.config;
 	uint handle = self.alloc_handle();

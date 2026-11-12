@@ -27,6 +27,7 @@ struct Config
 	uint request_timeout_ms;          // default 10000; TimeoutHint and local deadline
 	uint handshake_timeout_ms;        // default 10000: HEL->ACK and OPN->response deadlines
 	uint max_response_message_size;   // CreateSession.MaxResponseMessageSize, default 0 = no limit
+	char[32] nonce_entropy;           // the client nonce itself, from OS entropy; all zero = derive it from nonce_seed
 	ulong nonce_seed;                 // PRNG seed for the client nonce; the adapter must fill it from OS entropy (0 gives the same nonce every time)
 	bool allow_cleartext_password;    // USERNAME over policy None is refused unless set
 	bool allow_write;                 // default false; Write and Call refused with WRITE_NOT_ALLOWED when false
