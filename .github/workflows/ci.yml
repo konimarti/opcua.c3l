@@ -147,8 +147,12 @@ jobs:
           # Build recipe (verify target names against the open62541 v1.5.10 tree): the example servers without encryption.
           git clone --depth 1 --branch v1.5.10 https://github.com/open62541/open62541.git /tmp/open62541
           test "$(git -C /tmp/open62541 rev-parse HEAD)" = "93c3bdfc9ea4718b503c6cbf57876237addd0f2c"
+          # open62541's own unit tests are off: they need the Check library (the first run failed with "Could NOT find CHECK").
           cmake -S /tmp/open62541 -B /tmp/open62541/build -DCMAKE_BUILD_TYPE=Release -DUA_ENABLE_ENCRYPTION=OFF \
-            -DUA_BUILD_EXAMPLES=ON -DUA_BUILD_UNIT_TESTS=ON -DUA_NAMESPACE_ZERO=FULL
+            -DUA_BUILD_EXAMPLES=ON -DUA_BUILD_UNIT_TESTS=OFF -DUA_FORCE_WERROR=OFF -DUA_NAMESPACE_ZERO=FULL
+          for target in ci_server access_control_server tutorial_server_firststeps; do
+            cmake --build /tmp/open62541/build --target help | grep -q "$target" || { echo "no target $target in this configuration"; exit 1; }
+          done
           cmake --build /tmp/open62541/build --target ci_server access_control_server tutorial_server_firststeps -j 4
           mkdir -p .work/peer/open62541
           cp /tmp/open62541/build/bin/ci_server /tmp/open62541/build/bin/access_control_server /tmp/open62541/build/bin/tutorial_server_firststeps .work/peer/open62541/
