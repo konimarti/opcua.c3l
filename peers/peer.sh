@@ -9,12 +9,28 @@ action=$1
 peer=$2
 port=${3:-}
 pidfile=peers/$peer.pid
+
+# Waits until the port accepts connections (at most 60 s) and fails when the peer has died instead.
+wait_for_port() {
+	for _ in $(seq 1 120); do
+		if ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+			echo "the peer exited early, see peers/$peer.log" >&2
+			exit 1
+		fi
+		if (echo > "/dev/tcp/127.0.0.1/$1") 2>/dev/null; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	echo "the peer did not listen on port $1 within 60 s, see peers/$peer.log" >&2
+	exit 1
+}
 case "$action:$peer" in
 start:open62541)
 	port=${port:-4840}
 	nohup .work/peer/open62541/ci_server "$port" > peers/$peer.log 2>&1 &
 	echo $! > "$pidfile"
-	sleep 2
+	wait_for_port "$port"
 	cat > peers/peer.env <<ENV
 OPCUA_PEER_URL=opc.tcp://127.0.0.1:$port
 OPCUA_NODE_INT32=ns=1;s=the.answer
@@ -28,7 +44,8 @@ start:asyncua)
 	port=${port:-4841}
 	nohup .work/peer/venv/bin/python peers/asyncua_server.py "$port" peers/peer.env > peers/$peer.log 2>&1 &
 	echo $! > "$pidfile"
-	sleep 4
+	wait_for_port "$port"
+	sleep 1                                  # the env file is written once the server is up
 	echo "OPCUA_PEER_PID=$(cat "$pidfile")" >> peers/peer.env
 	;;
 stop:*)
