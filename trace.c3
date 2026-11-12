@@ -161,6 +161,7 @@ fn void trace_chunk_text(DString* s, char[] chunk) @private
 // Splits a byte stream into frames and traces every complete one.
 struct FrameTracer
 {
+	sz skip;                 // bytes of an oversized frame still to be dropped
 	ByteBuf pending;
 	uint max_frame;          // frames announcing more are not buffered (the receive buffer size of the connection)
 }
@@ -174,15 +175,31 @@ fn void FrameTracer.free(&self) => self.pending.free();
 
 fn void FrameTracer.feed(&self, char[] data, ByteBuf* out_text)
 {
-	if (catch self.pending.append(data)) return;
+	char[] input = data;
+	if (self.skip > 0)
+	{
+		sz n = input.len < self.skip ? input.len : self.skip;
+		self.skip -= n;
+		input = input[n..];
+	}
+	if (catch self.pending.append(input)) return;
 	while (self.pending.len >= 8)
 	{
 		char[] all = self.pending.bytes();
 		uint size = trace_u32(all, 4);
-		if (size < 8 || size > self.max_frame)
+		if (size < 8)
 		{
 			self.pending.clear();                      // not a frame boundary: give up on this buffer
 			return;
+		}
+		if (size > self.max_frame)
+		{
+			// the reader refuses such a frame anyway: do not buffer it, drop exactly its bytes and trace what follows
+			self.skip = size > self.pending.len ? size - self.pending.len : 0;
+			sz kept = self.pending.len > size ? self.pending.len - size : 0;
+			if (kept > 0) mem::move(all.ptr, all.ptr + size, kept);
+			self.pending.len = kept;
+			continue;
 		}
 		if (self.pending.len < size) return;
 		trace_chunk(all[:size], out_text);

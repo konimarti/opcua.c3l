@@ -26,6 +26,9 @@ struct Client
 
 fn Duration default_io_timeout() @private => time::sec(10);
 
+// A Limits built by hand has 0 in the browse fields: that means the default, not "no page at all".
+fn uint browse_limit(uint value, uint default_value) @private => value == 0 ? default_value : value;
+
 fn bool all_zero(char[] b) @private
 {
 	foreach (x : b)
@@ -48,7 +51,7 @@ fn Client*? client_connect(Allocator allocator, Transport transport, String endp
 	c.io_timeout = default_io_timeout();
 	c.verbose = verbose;
 	c.machine.init(allocator, config);                   // from here on c.free() is safe on every path
-	c.trace_out.init(allocator, config.receive_buffer_size);
+	c.trace_out.init(allocator, config.send_buffer_size);
 	c.trace_in.init(allocator, config.receive_buffer_size);
 	char[]? buf = alloc::alloc_array_try(allocator, char, 16384);
 	if (catch err = buf)
@@ -346,14 +349,14 @@ fn BrowseResult? Client.browse(&self, Allocator alloc, NodeId node, BrowseDirect
 	uint pages = 0;
 	while (true)
 	{
-		if (merged.len() > self.machine.config.limits.max_browse_references)
+		if (merged.len() > browse_limit(self.machine.config.limits.max_browse_references, 1_000_000))
 		{
 			if (point.len > 0) self.release_point(alloc, point);
 			return TOO_MANY_PAGES~;                          // more references than the limit allows, however they arrived
 		}
 		if (point.len == 0 || status_is_bad(status)) break;
 		pages++;
-		if (pages > self.machine.config.limits.max_browse_pages)
+		if (pages > browse_limit(self.machine.config.limits.max_browse_pages, 1000))
 		{
 			self.release_point(alloc, point);                 // a server that never stops must not make the client grow without bound
 			return TOO_MANY_PAGES~;
