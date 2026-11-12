@@ -3,6 +3,7 @@ import std::time;
 import std::time::clock;
 import std::net;
 import std::net::tcp;
+import std::core::env;
 
 // The Transport interface: the shape is identical in all five libraries, each library has its own copy and its own faultdef
 // with the same names TIMEOUT and CLOSED. A TlsTransport or a test double is passed in through an explicit interface cast:
@@ -180,3 +181,6 @@ fn Now clock_now()
 	long unix_ms = (long)time::now() / 1000;
 	return { .mono_ms = (ulong)mono, .utc = datetime_from_unix_ms(unix_ms) };
 }
+
+// The library version: it is written in project.json only.
+fn String version() => env::PROJECT_VERSION;
