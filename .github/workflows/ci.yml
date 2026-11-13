@@ -151,11 +151,13 @@ jobs:
           cmake -S /tmp/open62541 -B /tmp/open62541/build -DCMAKE_BUILD_TYPE=Release -DUA_ENABLE_ENCRYPTION=OFF \
             -DUA_BUILD_EXAMPLES=ON -DUA_BUILD_UNIT_TESTS=OFF -DUA_FORCE_WERROR=OFF -DUA_NAMESPACE_ZERO=FULL
           cmake --build /tmp/open62541/build --target ci_server access_control_server tutorial_server_firststeps -j 4
+          # The examples are written to build/bin/examples (examples/CMakeLists.txt sets CMAKE_RUNTIME_OUTPUT_DIRECTORY there).
+          out=/tmp/open62541/build/bin/examples
           for bin in ci_server access_control_server tutorial_server_firststeps; do
-            test -x "/tmp/open62541/build/bin/$bin" || { echo "the build did not produce $bin"; exit 1; }
+            test -x "$out/$bin" || { echo "the build did not produce $bin"; exit 1; }
           done
           mkdir -p .work/peer/open62541
-          cp /tmp/open62541/build/bin/ci_server /tmp/open62541/build/bin/access_control_server /tmp/open62541/build/bin/tutorial_server_firststeps .work/peer/open62541/
+          for bin in ci_server access_control_server tutorial_server_firststeps; do cp "$out/$bin" .work/peer/open62541/; done
       - name: asyncua in a venv (exact version)
         run: |
           set -euo pipefail
